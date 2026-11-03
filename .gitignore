@@ -1,0 +1,42 @@
+# Credentials and private machine configuration
+.env
+.env.*
+.env-*
+!.env.example
+!.env.deploy.example
+*.key
+*.pem
+
+# Local runtime state, tools and development metadata
+/data/
+/logs/
+/.local/
+/.agents/
+/.codex/
+/.aws/
+/deploy/tools/
+*.db
+*.db-*
+*.sqlite*
+*.log
+
+# Python and build artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+*.whl
+
+# Downloaded archives and editor files
+*.zip
+*.tar
+*.tar.*
+*.deb
+.DS_Store
+.idea/
+*.swp
+*~

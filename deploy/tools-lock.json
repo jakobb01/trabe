@@ -1,0 +1,11 @@
+{
+  "quadlet": {
+    "armhf": {
+      "version": "5.4.2+ds1-2+b2",
+      "package_url": "https://deb.debian.org/debian/pool/main/p/podman/podman_5.4.2+ds1-2+b2_armhf.deb",
+      "package_sha256": "39a1cea267be12b760b8ecf9272563143d88e0eb69e6a3e54f221739eb3f3567",
+      "binary_sha256": "efb8bbcaee71993966ff08113fffb970a846ce8891af18bee5e3c0d13ed89986",
+      "member": "./usr/libexec/podman/quadlet"
+    }
+  }
+}

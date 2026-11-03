@@ -1,0 +1,39 @@
+[Unit]
+Description=StockPulse Sentinel Telegram agent
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Container]
+Image=localhost/stock-agent:current
+ContainerName=stock-agent
+EnvironmentFile=%h/.config/stock-agent/agent.env
+Environment=DATABASE_PATH=/data/stock_agent.db
+# Podman creates this named volume lazily. Avoid a generated `volume create
+# --ignore` unit, because that flag is absent from the Pi's Podman 4.3.
+Volume=stock-agent-data:/data:U
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+StopTimeout=60
+PodmanArgs=--pids-limit=128
+HealthCmd=python -m stock_agent health
+HealthInterval=60s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=90s
+HealthOnFailure=kill
+
+[Service]
+# Podman 4.3 does not remove --cidfile on container removal. systemd serializes
+# this service's starts, so clear only its own stale file before recreation.
+ExecStartPre=/usr/bin/rm -f %t/%N.cid
+Restart=always
+RestartSec=30
+TimeoutStartSec=300
+TimeoutStopSec=75
+MemoryMax=256M
+UMask=0077
+
+[Install]
+WantedBy=default.target

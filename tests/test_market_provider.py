@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
-from stock_agent.api import ApiError, MarketData
-from stock_agent.scans import Scans
-from stock_agent.store import Store
+from trabe.api import ApiError, MarketData
+from trabe.scans import Scans
+from trabe.store import Store
 
 VST_QUOTE = {
     "Global Quote": {
@@ -55,8 +55,8 @@ class ProviderTests(unittest.TestCase):
             now[0] += delay
 
         with (
-            patch("stock_agent.api.time.time", side_effect=lambda: now[0]),
-            patch("stock_agent.api.time.sleep", side_effect=sleep),
+            patch("trabe.api.time.time", side_effect=lambda: now[0]),
+            patch("trabe.api.time.sleep", side_effect=sleep),
         ):
             MarketData("key", self.store, transport).quote("GOOGL")
             other = MarketData("key", Store(self.store.path), transport)

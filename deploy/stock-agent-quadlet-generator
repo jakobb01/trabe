@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installed once as a root-owned user generator. Each invocation runs as that user.
-# Emit only StockPulse units, and do nothing for accounts without this application.
+# Emit only trabe units, and do nothing for accounts without this application.
 unit_dir="$HOME/.config/stock-agent/quadlet"
 generator="$HOME/.local/libexec/stock-agent/quadlet"
 if [ ! -d "$unit_dir" ] || [ ! -x "$generator" ]; then

@@ -3,6 +3,7 @@
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$project_dir"
+python3 scripts/prepare_runtime.py
 image=${CHECK_IMAGE:-localhost/stock-agent:check}
 runtime=(podman)
 if [[ -n ${CHECK_RUNTIME_ROOT:-} ]]; then
@@ -18,6 +19,7 @@ restrictions=(--rm --network=none --read-only --cap-drop=all --security-opt=no-n
               --pids-limit=128 --memory=256m)
 "${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m unittest discover -s tests -q
 "${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m unittest discover -s tests -p 'integration_*.py' -v
+"${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m tests.soak_intraday
 "${runtime[@]}" run "${restrictions[@]}" "$image" python -c '
 import os,ssl,sqlite3
 from pathlib import Path

@@ -23,9 +23,10 @@ class DeploymentTests(unittest.TestCase):
         self.bin = self.path / "bin"
         self.bin.mkdir()
         (self.source / "deploy/quadlet").mkdir(parents=True)
-        (self.source / "stock_agent").mkdir()
+        (self.source / "deploy/runtime").mkdir()
+        (self.source / "trabe").mkdir()
         (self.source / "Containerfile").write_text("FROM test\n")
-        (self.source / "stock_agent/__init__.py").write_text("version = 1\n")
+        (self.source / "trabe/__init__.py").write_text("version = 1\n")
         # Preflight is separately checked by the live installer. Model a ready host.
         (self.source / "deploy/preflight.sh").write_text("exit 0\n")
         for name in ("stock-agent.container", "stock-agent-data.volume"):
@@ -307,7 +308,7 @@ with tarfile.open(fileobj=sys.stdin.buffer,mode='r|gz') as bundle:
             self.assertNotIn("StrictHostKeyChecking=no", str(calls))
             names = (path / "source_names").read_text().splitlines()
             self.assertIn("Containerfile", names)
-            self.assertIn("stock_agent/api.py", names)
+            self.assertIn("trabe/api.py", names)
             self.assertNotIn(".env", names)
             self.assertNotIn(".env.deploy", names)
             self.assertFalse(any("__pycache__" in name for name in names))

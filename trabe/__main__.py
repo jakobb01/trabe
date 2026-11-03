@@ -1,26 +1,39 @@
 import argparse
+import json
 import logging
 from pathlib import Path
 
-from stock_agent.api import ApiError, MarketData, Telegram
-from stock_agent.config import Config
-from stock_agent.runtime import health, run
-from stock_agent.setup import setup
-from stock_agent.store import Store
+from trabe.api import ApiError, MarketData, Telegram
+from trabe.config import Config
+from trabe.maintenance import Maintenance, prune_backups, release_backup
+from trabe.providers import Finnhub
+from trabe.runtime import health, run
+from trabe.setup import setup
+from trabe.store import Store
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Telegram-controlled StockPulse Sentinel")
+    parser = argparse.ArgumentParser(prog="trabe", description="Telegram-controlled stock watcher")
     commands = parser.add_subparsers(dest="command")
-    for name in ("run", "setup", "doctor"):
+    for name in ("run", "setup", "doctor", "maintenance", "backup-prune"):
         subparser = commands.add_parser(name)
         subparser.add_argument("--env-file", type=Path, default=Path(".env"))
         if name == "doctor":
+            subparser.add_argument("--provider", choices=("finnhub", "alphavantage"))
+            subparser.add_argument(
+                "--validate-finnhub",
+                action="store_true",
+                help="Check free-account quotes and record verified credentials",
+            )
             subparser.add_argument(
                 "--market", action="store_true", help="Fetch/cache one IBM quote"
             )
             subparser.add_argument(
                 "--send", action="store_true", help="Send the result to your paired chat"
+            )
+        if name == "backup-prune":
+            subparser.add_argument(
+                "--release", help="Release the completed deployment snapshot before pruning"
             )
     health_parser = commands.add_parser("health")
     health_parser.add_argument(
@@ -40,6 +53,17 @@ def main() -> int:
             setup(args.env_file)
             return 0
         config = Config.load(getattr(args, "env_file", Path(".env")))
+        if args.command == "backup-prune":
+            directory = config.database.parent / "backups"
+            if args.release:
+                release_backup(directory, args.release)
+            print(json.dumps(prune_backups(directory)))
+            return 0
+        if args.command == "maintenance":
+            maintenance = Maintenance(Store(config.database), config.owner_id)
+            maintenance.run_once()
+            print(json.dumps(maintenance.metrics()))
+            return 0
         if args.command == "backup":
             Store(config.database).backup(args.output)
             print(f"Consistent database backup saved to {args.output} (mode 0600).")
@@ -54,9 +78,32 @@ def main() -> int:
             store = Store(config.database)
             report = [f"Telegram API: connected as @{me['username']}", "SQLite: writable"]
             if args.market:
-                quote, cached = MarketData(config.api_key, store).quote("IBM", refresh=True)
+                provider = args.provider or store.settings()["market_provider"]
+                if (
+                    not args.provider
+                    and provider == "alphavantage"
+                    and not config.api_key
+                    and config.finnhub_key
+                ):
+                    # Bootstrap can start with only a Finnhub key; this probe
+                    # does not change the owner's selected runtime provider.
+                    provider = "finnhub"
+                market = (
+                    Finnhub(config.finnhub_key, store)
+                    if provider == "finnhub"
+                    else MarketData(config.api_key, store)
+                )
+                quote, cached = market.quote("IBM", refresh=True)
                 report.append(
-                    f"Market API: IBM {quote['price']:.4f}, trading day {quote['trading_day']} ({'cached' if cached else 'fetched'})"
+                    f"Market API: {provider} IBM {quote['price']:.4f}, trading day {quote['trading_day']} ({'cached' if cached else 'fetched'})"
+                )
+            if args.validate_finnhub and config.finnhub_key:
+                checked = Finnhub(config.finnhub_key, store).validate()
+                report.append(
+                    "Finnhub free-account quotes and market status: verified (GOOGL, VST)"
+                )
+                report.append(
+                    f"Finnhub market session: {checked['market_status'].get('session') or 'closed'}"
                 )
             if args.send:
                 telegram.send(config.owner_id, "✅ Deployment check\n" + "\n".join(report))

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def check(generator: Path, podman: Path) -> dict:
     environment = os.environ | {"QUADLET_UNIT_DIRS": str(ROOT / "deploy/quadlet")}
     commands = []
-    with tempfile.TemporaryDirectory(prefix="stockpulse-quadlet-") as directory:
+    with tempfile.TemporaryDirectory(prefix="trabe-quadlet-") as directory:
         subprocess.run(
             [str(generator), "-user", directory],
             env=environment,
@@ -90,7 +90,7 @@ def check(generator: Path, podman: Path) -> dict:
         if not commands or "WantedBy=default.target" not in text:
             raise ValueError("Generated service is missing its command or boot dependency.")
         negative = subprocess.run(
-            [str(podman), "run", "--stockpulse-invalid-option", "--help"],
+            [str(podman), "run", "--trabe-invalid-option", "--help"],
             capture_output=True,
             text=True,
             timeout=20,

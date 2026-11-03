@@ -8,12 +8,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from stock_agent.preferences import DEFAULTS, validate_setting
+from trabe.preferences import DEFAULTS, validate_setting
+from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
-class Store:
+class Store(MarketStorage):
     def __init__(self, path: Path):
         self.path = path
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -54,6 +55,11 @@ class Store:
                     created_at REAL NOT NULL
                 );
             """)
+            db.execute("BEGIN IMMEDIATE")
+            for statement in SCHEMA:
+                db.execute(statement)
+            if "kind" not in {row[1] for row in db.execute("PRAGMA table_info(outbox)")}:
+                db.execute("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'reply'")
             db.executemany("INSERT OR IGNORE INTO settings VALUES (?, ?)", DEFAULTS.items())
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 

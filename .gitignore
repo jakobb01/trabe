@@ -15,6 +15,7 @@
 /.codex/
 /.aws/
 /deploy/tools/
+/deploy/runtime/
 *.db
 *.db-*
 *.sqlite*

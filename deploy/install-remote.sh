@@ -22,7 +22,7 @@ mkdir -p "$unit_dir"
 exec 9>"$state_dir/deploy.lock"
 flock -n 9 || { printf '%s\n' 'Another stock-agent deployment is in progress.' >&2; exit 1; }
 
-release=$(cd "$source_dir" && sha256sum Containerfile stock_agent/*.py | sha256sum | cut -c1-16)
+release=$(cd "$source_dir" && { sha256sum Containerfile; find trabe deploy/runtime -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
 image="localhost/stock-agent:build-$release"
 # The Pi builds its own architecture; no registry account or exposed build daemon.
 podman build --format=docker --pull=missing -t "$image" -f "$source_dir/Containerfile" "$source_dir"
@@ -32,22 +32,35 @@ podman build --format=docker --pull=missing -t "$image" -f "$source_dir/Containe
 database_backup=
 if podman container exists stock-agent && [[ $(podman inspect stock-agent --format '{{.State.Running}}') == true ]]; then
     database_backup=$(podman exec -i stock-agent python - <<'PY'
-import os,sqlite3,time,uuid
+import fcntl,json,os,sqlite3,time,uuid
 from pathlib import Path
 database=Path(os.environ['DATABASE_PATH'])
 directory=database.parent/'backups'
 directory.mkdir(mode=0o700,exist_ok=True)
 name='pre-deploy-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())+'-'+uuid.uuid4().hex[:8]+'.sqlite3'
 destination=directory/name
-descriptor=os.open(destination,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)
-os.close(descriptor)
-source=sqlite3.connect(database)
-target=sqlite3.connect(destination)
+lock=os.open(directory/'.backup.lock',os.O_CREAT|os.O_RDWR,0o600)
+fcntl.flock(lock,fcntl.LOCK_EX)
+marker=directory/'.protected.json'
+temporary=directory/('.protected-'+uuid.uuid4().hex+'.tmp')
+temporary.write_text(json.dumps({'name':name}))
+temporary.chmod(0o600)
+os.replace(temporary,marker)
+source=target=None
 try:
+    descriptor=os.open(destination,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)
+    os.close(descriptor)
+    source=sqlite3.connect(database)
+    target=sqlite3.connect(destination)
     source.backup(target)
+except BaseException:
+    destination.unlink(missing_ok=True)
+    marker.unlink(missing_ok=True)
+    raise
 finally:
-    target.close()
-    source.close()
+    if target is not None: target.close()
+    if source is not None: source.close()
+    os.close(lock)
 print(name)
 PY
 )
@@ -116,6 +129,13 @@ rollback() {
         fi
         systemctl --user start stock-agent.service || true
     fi
+    if [[ -n "$database_backup" && -f "$config_dir/agent.env" ]]; then
+        # Prune only files: this must not migrate a restored older database.
+        podman run --rm --network=none --read-only --cap-drop=all \
+            --security-opt=no-new-privileges --env-file "$config_dir/agent.env" \
+            -v stock-agent-data:/data:U "$image" \
+            python -m trabe backup-prune --release "$database_backup" || true
+    fi
     rm -rf "$backup_dir"
     printf '%s\n' 'Inspect: journalctl --user -u stock-agent.service -n 80 --no-pager' >&2
     exit 1
@@ -135,7 +155,7 @@ systemctl --user restart stock-agent.service
 
 wait_ready() {
     for ((attempt=0; attempt<45; attempt++)); do
-        if podman exec stock-agent python -m stock_agent health --ready >/dev/null 2>&1; then
+        if podman exec stock-agent python -m trabe health --ready >/dev/null 2>&1; then
             return 0
         fi
         sleep 2
@@ -144,9 +164,9 @@ wait_ready() {
 }
 wait_ready
 # Validate the market API first. Announce deployment only after restart succeeds.
-podman exec stock-agent python -m stock_agent doctor --market
+podman exec stock-agent python -m trabe doctor --market --validate-finnhub
 # A real restart must preserve the watchlist and all user preferences.
-state_digest='import hashlib,json,os; from pathlib import Path; from stock_agent.store import Store; store=Store(Path(os.environ["DATABASE_PATH"])); data={"settings":store.settings(),"watchlist":store.watchlist()}; print(hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest())'
+state_digest='import hashlib,json,os; from pathlib import Path; from trabe.store import Store; store=Store(Path(os.environ["DATABASE_PATH"])); data={"settings":store.settings(),"watchlist":store.watchlist()}; print(hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest())'
 before_restart=$(podman exec stock-agent python -c "$state_digest")
 systemctl --user restart stock-agent.service
 wait_ready
@@ -154,7 +174,12 @@ after_restart=$(podman exec stock-agent python -c "$state_digest")
 [[ "$before_restart" == "$after_restart" ]]
 systemctl --user is-active stock-agent.service
 [[ -z $(podman port stock-agent) ]]
-podman exec stock-agent python -m stock_agent doctor --send
+if [[ -n "$database_backup" ]]; then
+    podman exec stock-agent python -m trabe backup-prune --release "$database_backup"
+else
+    podman exec stock-agent python -m trabe backup-prune
+fi
+podman exec stock-agent python -m trabe doctor --send
 
 trap - ERR
 rm -rf "$backup_dir"

@@ -3,20 +3,23 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stockpulse-agent"
-version = "0.2.1"
+name = "trabe"
+version = "0.3.0"
 description = "Telegram-controlled stock watcher for a Raspberry Pi"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["websocket-client==1.9.2"]
 
 [project.optional-dependencies]
 dev = ["ruff==0.17.3"]
 
 [project.scripts]
-stock-agent = "stock_agent.__main__:main"
+trabe = "trabe.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["stock_agent*"]
+include = ["trabe*"]
+
+[tool.setuptools.package-data]
+trabe = ["data/*.json"]
 
 [tool.ruff]
 target-version = "py311"

@@ -13,10 +13,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from stock_agent.api import MarketData, Telegram, request_json
-from stock_agent.config import Config
-from stock_agent.runtime import run
-from stock_agent.store import Store
+from trabe.api import MarketData, Telegram, request_json
+from trabe.config import Config
+from trabe.runtime import run
+from trabe.store import Store
 
 
 class RuntimeHttpTests(unittest.TestCase):

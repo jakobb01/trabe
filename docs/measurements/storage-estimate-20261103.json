@@ -1,0 +1,59 @@
+{
+  "measured_on": "2026-11-03",
+  "sqlite_version": "3.46.1",
+  "page_size_bytes": 4096,
+  "method": "Synthetic proposed market-data schema in temporary SQLite files; 390 minute transactions per session; 65 archived sessions plus current day; simulate rollup, packed copy and next-day page reuse.",
+  "excludes": [
+    "existing application tables",
+    "container images",
+    "journald logs",
+    "manual backup files"
+  ],
+  "scenarios": [
+    {
+      "symbols": 2,
+      "minute_rows_per_full_session": 780,
+      "retained_daily_sessions": 66,
+      "daily_summary_rows": 132,
+      "active_database_bytes": 110592,
+      "archive_only_packed_bytes": 40960,
+      "allocated_after_rollup_bytes": 110592,
+      "reusable_bytes_after_rollup": 69632,
+      "next_session_database_bytes": 110592,
+      "peak_wal_bytes": 4136512,
+      "peak_database_wal_shm_bytes": 4279872,
+      "three_retained_backup_copies_bytes": 331776,
+      "one_extra_in_progress_backup_bytes": 110592
+    },
+    {
+      "symbols": 10,
+      "minute_rows_per_full_session": 3900,
+      "retained_daily_sessions": 66,
+      "daily_summary_rows": 660,
+      "active_database_bytes": 458752,
+      "archive_only_packed_bytes": 102400,
+      "allocated_after_rollup_bytes": 458752,
+      "reusable_bytes_after_rollup": 356352,
+      "next_session_database_bytes": 458752,
+      "peak_wal_bytes": 4198312,
+      "peak_database_wal_shm_bytes": 4689832,
+      "three_retained_backup_copies_bytes": 1376256,
+      "one_extra_in_progress_backup_bytes": 458752
+    },
+    {
+      "symbols": 50,
+      "minute_rows_per_full_session": 19500,
+      "retained_daily_sessions": 66,
+      "daily_summary_rows": 3300,
+      "active_database_bytes": 2248704,
+      "archive_only_packed_bytes": 389120,
+      "allocated_after_rollup_bytes": 2252800,
+      "reusable_bytes_after_rollup": 1794048,
+      "next_session_database_bytes": 2252800,
+      "peak_wal_bytes": 4461992,
+      "peak_database_wal_shm_bytes": 6743464,
+      "three_retained_backup_copies_bytes": 6758400,
+      "one_extra_in_progress_backup_bytes": 2252800
+    }
+  ]
+}

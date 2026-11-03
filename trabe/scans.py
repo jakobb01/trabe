@@ -3,13 +3,21 @@
 import logging
 import queue
 import threading
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from stock_agent.api import ApiError, MarketData
-from stock_agent.store import Store
+from trabe.api import ApiError, MarketData
+from trabe.store import Store
 
 logger = logging.getLogger(__name__)
+
+
+class ScanResult(str):
+    def __new__(cls, text, kind="reply"):
+        result = super().__new__(cls, text)
+        result.kind = kind
+        return result
 
 
 class Scans:
@@ -33,7 +41,11 @@ class Scans:
         # A daemon cannot hold shutdown indefinitely. Every API call is bounded,
         # and the next runtime marks an interrupted job explicitly.
         self._thread = threading.Thread(
-            target=self._work, args=(job_id, stocks), daemon=True, name="watchlist-scan"
+            target=self._work,
+            args=(job_id, stocks),
+            kwargs={"scheduled": day is not None},
+            daemon=True,
+            name="watchlist-scan",
         )
         try:
             self._thread.start()
@@ -42,18 +54,23 @@ class Scans:
             raise ValueError("Scan worker could not start. Try again later.") from None
         return f"Scan #{job_id} started for {len(stocks)} symbol(s). I'll send the summary here. /status stays available."
 
-    def _work(self, job_id: int, stocks: list[tuple[str, int]]):
+    def _work(self, job_id: int, stocks: list[tuple[str, int]], *, scheduled: bool = False):
         settings = self.store.settings()
         threshold = float(settings["dip_threshold_percent"])
         lines = [f"Watchlist scan #{job_id} • daily dip threshold {threshold:g}%"]
         failures, checked, dips = 0, 0, 0
         status = "completed"
+        intraday = settings["market_provider"] == "finnhub"
         try:
             # Prefer older/missing cache entries on a large watchlist so repeated
             # scans make progress within the same request budget.
             cache = self.store.all_cached_quotes()
             stocks = sorted(stocks, key=lambda row: cache.get(row[0], ({}, 0))[1])
             for ticker, _tier in stocks:
+                if scheduled and self.store.automation_paused():
+                    status = "interrupted"
+                    lines.append("Scheduled scan paused by owner.")
+                    break
                 if self._stop.is_set():
                     status = "interrupted"
                     lines.append("Scan interrupted by service shutdown.")
@@ -67,6 +84,11 @@ class Scans:
                     lines.append(
                         f"{marker} {ticker}: {quote['price']:.4f} ({quote['change_percent']:+.2f}%) • "
                         f"{quote['trading_day']}{' • cached' if cached else ''}"
+                        + (
+                            f" • source age {max(0, int(time.time() - quote['source_time']))}s"
+                            if quote.get("provider") == "finnhub"
+                            else ""
+                        )
                     )
                 except ValueError as error:
                     lines.append(str(error))
@@ -89,7 +111,9 @@ class Scans:
                 f"Checked {checked}/{len(stocks)} • dip flags: {dips} • failed requests: {failures}."
             )
             lines.append(
-                "Alpha Vantage end-of-day data; listing currency. These are daily changes, not live prices."
+                "Finnhub observed feed prices, USD; change vs provider previous close. Source age matters; these scan flags do not enqueue duplicate alerts."
+                if intraday
+                else "Alpha Vantage end-of-day data; listing currency. These are daily changes, not live prices."
             )
         except Exception:
             logger.error("Watchlist scan failed unexpectedly; no provider details logged.")
@@ -97,12 +121,12 @@ class Scans:
             status = "failed"
         summary = "\n".join(lines)
         self.store.finish_scan(job_id, summary, status)
-        self.results.put(summary)
+        self.results.put(ScanResult(summary, "summary" if scheduled else "reply"))
 
     def schedule(self, now: datetime | None = None):
         settings = self.store.settings()
         scheduled = settings["daily_scan_time"]
-        if scheduled == "off" or not self.store.watchlist():
+        if scheduled == "off" or not self.store.watchlist() or self.store.automation_paused():
             return
         local = (now or datetime.now().astimezone()).astimezone(ZoneInfo(settings["timezone"]))
         if local.weekday() >= 5 or local.strftime("%H:%M") < scheduled:

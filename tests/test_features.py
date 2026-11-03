@@ -5,14 +5,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from stock_agent.api import ApiError, MarketData, message_chunks
-from stock_agent.bot import MENU, Bot
-from stock_agent.config import Config
-from stock_agent.outbox import Outbox
-from stock_agent.preferences import validate_setting
-from stock_agent.runtime import health, instance_lock, run
-from stock_agent.scans import Scans
-from stock_agent.store import Store
+from trabe.api import ApiError, MarketData, message_chunks
+from trabe.bot import MENU, Bot
+from trabe.config import Config
+from trabe.outbox import Outbox
+from trabe.preferences import validate_setting
+from trabe.runtime import health, instance_lock, run
+from trabe.scans import Scans
+from trabe.store import Store
 
 TOKEN = "123456:" + "a" * 32
 
@@ -215,7 +215,7 @@ class FeatureTests(unittest.TestCase):
 
     def test_duplicate_runtime_is_refused_before_startup(self):
         with instance_lock(self.store.path):
-            with self.assertRaisesRegex(ValueError, "Another StockPulse"):
+            with self.assertRaisesRegex(ValueError, "Another trabe"):
                 with instance_lock(self.store.path):
                     self.fail("second process acquired the same lock")
         with instance_lock(self.store.path):

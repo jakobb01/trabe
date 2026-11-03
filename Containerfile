@@ -8,8 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 # Metadata-only copies keep builds portable: no pip, apt or target-CPU execution.
 # Normalize readability even when SSH extraction uses umask 077.
-COPY --chmod=0755 stock_agent /app/stock_agent
+COPY --chmod=0755 trabe /app/trabe
+COPY --chmod=0755 deploy/runtime/ /app/
 COPY --chown=1000:1000 --chmod=0700 deploy/data/ /data/
 USER 1000:1000
-HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 CMD ["python", "-m", "stock_agent", "health"]
-CMD ["python", "-m", "stock_agent", "run"]
+HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 CMD ["python", "-m", "trabe", "health"]
+CMD ["python", "-m", "trabe", "run"]

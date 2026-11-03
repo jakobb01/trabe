@@ -3,7 +3,7 @@
 ssh_settings=$(python3 - <<'PY'
 import os
 from pathlib import Path
-from stock_agent.config import read_env
+from trabe.config import read_env
 
 try:
     values = read_env(Path(os.environ.get('DEPLOY_ENV_FILE', '.env.deploy'))) | dict(os.environ)

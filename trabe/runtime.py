@@ -10,13 +10,15 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from stock_agent import __version__
-from stock_agent.api import ApiError, MarketData, Telegram
-from stock_agent.bot import COMMANDS, MENU, Bot
-from stock_agent.config import Config
-from stock_agent.outbox import Outbox
-from stock_agent.preferences import validate_setting
-from stock_agent.store import Store
+from trabe import __version__
+from trabe.api import ApiError, MarketData, Telegram
+from trabe.bot import COMMANDS, MENU, Bot
+from trabe.config import Config
+from trabe.outbox import Outbox
+from trabe.preferences import validate_setting
+from trabe.providers import MarketRouter
+from trabe.store import Store
+from trabe.workers import Services
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ def instance_lock(database: Path):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError(
-                "Another StockPulse process is using this database. Stop it before starting another."
+                "Another trabe process is using this database. Stop it before starting another."
             ) from None
         yield
     finally:
@@ -66,7 +68,9 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
     store.set_state("last_poll", "0")
     telegram = telegram or Telegram(config.token)
     outbox = Outbox(store)
-    bot = Bot(config, store, outbox, market or MarketData(config.api_key, store))
+    market = market or MarketRouter(config, store)
+    services = Services(store, config, market, outbox, telegram)
+    bot = Bot(config, store, outbox, market, monitor=services.monitor)
     stop = stop_event if stop_event is not None else threading.Event()
     old_handlers = {}
     if threading.current_thread() is threading.main_thread():
@@ -85,11 +89,12 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
         if store.state("startup_notice_version") != __version__:
             outbox.send(
                 config.owner_id,
-                "✅ StockPulse Sentinel started. Use the menu below, /status or /help.",
+                "✅ trabe started. Use the menu below, /status or /help.",
                 reply_markup=MENU,
             )
             store.set_state("startup_notice_version", __version__)
         logger.info("Telegram connected; owner-only long polling started.")
+        services.start()
         backoff = 2
         while not stop.is_set():
             # Liveness measures our event loop, not an upstream provider's uptime.
@@ -102,8 +107,7 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
                         result = bot.scans.results.get_nowait()
                     except queue.Empty:
                         break
-                    outbox.send(config.owner_id, result)
-                outbox.flush(telegram)
+                    outbox.send(config.owner_id, result, kind=getattr(result, "kind", "reply"))
                 updates = telegram.updates(
                     int(store.state("telegram_offset", "0")), timeout=poll_timeout
                 )
@@ -112,7 +116,6 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
                     if stop.is_set():
                         break
                     bot.process(update)
-                outbox.flush(telegram)
                 backoff = 2
             except ApiError as error:
                 if error.code in (401, 403, 409):
@@ -130,6 +133,7 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
                 backoff = min(backoff * 2, 60)
     finally:
         bot.scans.close()
+        services.close()
         store.set_state("heartbeat", "0")
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)

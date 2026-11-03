@@ -30,14 +30,17 @@ class Config:
     owner_id: int
     api_key: str = field(repr=False)
     database: Path
+    finnhub_key: str = field(default="", repr=False)
 
     def __post_init__(self):
         if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.token):
-            raise ValueError("Set a valid TELEGRAM_BOT_TOKEN; run python3 -m stock_agent setup.")
+            raise ValueError("Set a valid TELEGRAM_BOT_TOKEN; run python3 -m trabe setup.")
         if type(self.owner_id) is not int or not 0 < self.owner_id < 2**52:
-            raise ValueError("Pair your private Telegram chat: python3 -m stock_agent setup.")
+            raise ValueError("Pair your private Telegram chat: python3 -m trabe setup.")
         if self.api_key and not re.fullmatch(r"[A-Za-z0-9_-]+", self.api_key):
             raise ValueError("ALPHA_VANTAGE_API_KEY contains invalid characters.")
+        if self.finnhub_key and not re.fullmatch(r"[A-Za-z0-9_-]+", self.finnhub_key):
+            raise ValueError("FINNHUB_API_KEY contains invalid characters.")
         if not isinstance(self.database, Path) or str(self.database) == ".":
             raise ValueError("DATABASE_PATH must name a database file.")
 
@@ -48,6 +51,6 @@ class Config:
         owner = values.get("TELEGRAM_CHAT_ID", "").strip()
         api_key = values.get("ALPHA_VANTAGE_API_KEY", "").strip()
         if not owner.isascii() or not owner.isdecimal() or len(owner) > 16:
-            raise ValueError("Pair your private Telegram chat: python3 -m stock_agent setup.")
+            raise ValueError("Pair your private Telegram chat: python3 -m trabe setup.")
         database = Path(values.get("DATABASE_PATH", "data/stock_agent.db"))
-        return cls(token, int(owner), api_key, database)
+        return cls(token, int(owner), api_key, database, values.get("FINNHUB_API_KEY", "").strip())

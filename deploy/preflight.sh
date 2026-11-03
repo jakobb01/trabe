@@ -33,9 +33,9 @@ if [[ "$selected_mode" == bundled ]]; then
     for flag in --health-on-failure --sdnotify --cgroups --read-only --cap-drop --pids-limit; do
         [[ "$help" == *"$flag"* ]] || fail "Podman lacks required option $flag."
     done
-    printf '%s\n' 'Using an isolated StockPulse Quadlet generator; the host Podman package will not be upgraded.'
+    printf '%s\n' 'Using an isolated trabe Quadlet generator; the host Podman package will not be upgraded.'
     if [[ ! -x /usr/local/lib/systemd/user-generators/stock-agent-quadlet ]]; then
-        [[ "$mode" != bundled ]] || fail 'The StockPulse generator launcher must be installed first; run scripts/deploy.sh from WSL.'
+        [[ "$mode" != bundled ]] || fail 'The trabe generator launcher must be installed first; run scripts/deploy.sh from WSL.'
         printf '%s\n' 'STOCK_AGENT_GENERATOR_BOOTSTRAP=required'
     fi
 fi

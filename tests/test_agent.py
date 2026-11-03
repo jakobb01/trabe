@@ -9,12 +9,12 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-from stock_agent.api import ApiError, MarketData, Telegram, request_json
-from stock_agent.bot import Bot
-from stock_agent.config import Config, read_env
-from stock_agent.runtime import health
-from stock_agent.setup import setup, write_credentials
-from stock_agent.store import Store
+from trabe.api import ApiError, MarketData, Telegram, request_json
+from trabe.bot import Bot
+from trabe.config import Config, read_env
+from trabe.runtime import health
+from trabe.setup import setup, write_credentials
+from trabe.store import Store
 
 TOKEN = "123456:" + "a" * 32
 QUOTE = {
@@ -285,8 +285,8 @@ class AgentTests(unittest.TestCase):
             else []
         )
         with (
-            patch("stock_agent.setup.Telegram", return_value=fake),
-            patch("stock_agent.setup.secrets.token_hex", return_value="challenge"),
+            patch("trabe.setup.Telegram", return_value=fake),
+            patch("trabe.setup.secrets.token_hex", return_value="challenge"),
             patch.dict(os.environ, {}, clear=True),
             patch("sys.stdout", new_callable=io.StringIO),
         ):
@@ -297,7 +297,7 @@ class AgentTests(unittest.TestCase):
 
 class TransportTests(unittest.TestCase):
     def test_network_error_does_not_expose_url_or_key(self):
-        with patch("stock_agent.api.urlopen", side_effect=URLError("https://secret-token/")):
+        with patch("trabe.api.urlopen", side_effect=URLError("https://secret-token/")):
             with self.assertRaises(ApiError) as caught:
                 request_json("https://example.com/secret-token")
         self.assertNotIn("secret-token", str(caught.exception))
@@ -306,7 +306,7 @@ class TransportTests(unittest.TestCase):
         error = HTTPError(
             "https://secret-token/", 401, "secret-token", {}, io.BytesIO(b"secret-token")
         )
-        with patch("stock_agent.api.urlopen", side_effect=error):
+        with patch("trabe.api.urlopen", side_effect=error):
             with self.assertRaises(ApiError) as caught:
                 request_json("https://example.com/")
         self.assertEqual(caught.exception.code, 401)
@@ -315,7 +315,7 @@ class TransportTests(unittest.TestCase):
     def test_rate_limit_preserves_retry_after(self):
         body = io.BytesIO(b'{"parameters":{"retry_after":42}}')
         error = HTTPError("https://secret/", 429, "secret", {}, body)
-        with patch("stock_agent.api.urlopen", side_effect=error):
+        with patch("trabe.api.urlopen", side_effect=error):
             with self.assertRaises(ApiError) as caught:
                 request_json("https://example.com/")
         self.assertEqual(caught.exception.retry_after, 42)

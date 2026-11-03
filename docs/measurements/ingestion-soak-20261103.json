@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-03",
+  "kind": "production-code multi-session soak; fixture prices, no external services",
+  "environment": "amd64 production image, Python 3.13, network disabled, read-only root, 256 MiB memory limit",
+  "command": "python -m tests.soak_intraday",
+  "symbols": 50,
+  "sessions": 8,
+  "observations": 156000,
+  "daily_rows_before_expiry": 400,
+  "daily_rows_after_expiry": 0,
+  "database_bytes_by_session": [1896448, 1908736, 1912832, 1929216, 1941504, 1949696, 1957888, 1970176],
+  "peak_database_wal_shm_bytes": 1970176,
+  "max_rss_bytes": 30412800,
+  "armv7_qemu": {
+    "observations": 156000,
+    "sessions": 8,
+    "max_rss_bytes_including_emulator": 62959616,
+    "final_database_bytes": 1970176,
+    "daily_rows_before_expiry": 400,
+    "daily_rows_after_expiry": 0
+  },
+  "exclusions": ["container images", "journald logs", "backups", "manual files"],
+  "note": "Eight sessions, not the separate synthetic three-month storage model. Metrics are sampled before and after maintenance, not a filesystem-level continuous peak trace."
+}

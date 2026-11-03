@@ -6,12 +6,13 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from stock_agent import __version__
-from stock_agent.api import ApiError, MarketData, Telegram
-from stock_agent.config import Config
-from stock_agent.preferences import DESCRIPTIONS
-from stock_agent.scans import Scans
-from stock_agent.store import Store
+from trabe import __version__
+from trabe.api import ApiError, MarketData, Telegram
+from trabe.config import Config
+from trabe.controls import Controls, intraday_text
+from trabe.preferences import DESCRIPTIONS
+from trabe.scans import Scans
+from trabe.store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,14 @@ COMMANDS = [
     ("scan", "Check watchlist daily changes in the background"),
     ("lastscan", "Show the most recent scan result"),
     ("schedule", "Set daily scan time: /schedule 23:00 or off"),
+    ("provider", "Show/select the configured market provider"),
+    ("monitor", "Enable/disable intraday monitoring"),
+    ("alerts", "Show thresholds and recent alerts"),
+    ("alert", "Set per-stock rule: /alert VST -5"),
+    ("pause", "Pause automation: /pause 24h"),
+    ("resume", "Resume saved automation"),
+    ("history", "Daily summaries: /history VST 5"),
+    ("storage", "Storage and retention health"),
 ]
 
 MENU = {
@@ -37,6 +46,9 @@ MENU = {
         ["Status", "Watchlist"],
         ["Cached prices", "Scan watchlist"],
         ["Settings", "Help"],
+        ["Monitor on", "Monitor off"],
+        ["Alerts", "Storage"],
+        ["Pause 24h", "Resume"],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -49,9 +61,15 @@ BUTTONS = {
     "Scan watchlist": "/scan",
     "Settings": "/settings",
     "Help": "/help",
+    "Monitor on": "/monitor on",
+    "Monitor off": "/monitor off",
+    "Alerts": "/alerts",
+    "Storage": "/storage",
+    "Pause 24h": "/pause 24h",
+    "Resume": "/resume",
 }
 
-HELP = """StockPulse Sentinel
+HELP = """trabe
 /menu — show the control buttons
 /status — service health (uses no market API requests)
 /test — confirm Telegram delivery
@@ -62,6 +80,13 @@ HELP = """StockPulse Sentinel
 /prices — cached watchlist prices; no API requests
 /scan [TICKER] — background daily-change check
 /lastscan — recover the latest scan summary
+/provider [finnhub|alphavantage] — show/select a source
+/monitor on|off — intraday collection and alerts
+/alerts — thresholds, pause state and recent alerts
+/alert VST -5|default|off — set a stock's rule
+/pause 24h, /resume — pause/resume automation
+/history VST 5 — retained daily observed summaries
+/storage — local data, backups and maintenance
 /schedule HH:MM — opt into a weekday daily summary
 /schedule off — turn off scheduled checks
 /settings — show preferences
@@ -71,7 +96,7 @@ HELP = """StockPulse Sentinel
 /set dip_threshold_percent -4
 
 Settings and watchlist survive restarts. Symbol syntax is checked on /add; availability is checked on /quote.
-Quotes are the provider's default end-of-day data, not live prices. Scheduling is off until you enable it. Earnings, insider tracking and AI briefings will follow later."""
+Prices show their source and source timestamp. Alpha Vantage is end-of-day; Finnhub supplies the intraday feed. Monitoring starts off until enabled. Earnings, insider tracking and AI briefings will follow later."""
 
 
 def symbol(value: str) -> str:
@@ -82,11 +107,14 @@ def symbol(value: str) -> str:
 
 
 class Bot:
-    def __init__(self, config: Config, store: Store, telegram: Telegram, market: MarketData):
+    def __init__(
+        self, config: Config, store: Store, telegram: Telegram, market: MarketData, *, monitor=None
+    ):
         self.config, self.store, self.telegram, self.market = config, store, telegram, market
         self.started = time.monotonic()
         self.username = ""
         self.scans = Scans(store, market)
+        self.controls = Controls(config, store, market, monitor)
 
     def handle(self, update: dict):
         message = update.get("message", {})
@@ -121,10 +149,13 @@ class Bot:
             self.telegram.send(self.config.owner_id, reply)
 
     def command(self, command: str, args: list[str]) -> str:
+        extra = self.controls.handle(command, args)
+        if extra is not None:
+            return extra
         if command in ("start", "help", "menu"):
             return HELP
         if command == "test":
-            return "✅ Telegram delivery works. This response came from StockPulse Sentinel."
+            return "✅ Telegram delivery works. This response came from trabe."
         if command == "status":
             settings = self.store.settings()
             now = datetime.now(ZoneInfo(settings["timezone"])).strftime("%Y-%m-%d %H:%M %Z")
@@ -133,15 +164,14 @@ class Bot:
             scan = self.store.latest_scan()
             scan_status = f"#{scan[0]} {scan[1]}" if scan else "not run yet"
             return (
-                f"StockPulse {__version__} • running\n{now}\n"
+                f"trabe {__version__} • running\n{now}\n"
                 f"Uptime: {int(time.monotonic() - self.started)} seconds\n"
                 f"Watchlist: {len(self.store.watchlist())} symbols\n"
                 f"Alpha Vantage: {provider}\nLast quote trading day: {last_success}\n"
                 f"Local API attempts today (UTC): {self.store.usage()}/{settings['api_daily_budget']}\n"
                 f"Latest scan: {scan_status}\n"
                 f"Weekday summary: {settings['daily_scan_time']} ({settings['timezone']})\n"
-                "Use /quote IBM to test the market API.\n"
-                "Live intraday alerts are not enabled."
+                + self.controls.status()
             )
         if command == "watchlist":
             stocks = self.store.watchlist()
@@ -157,21 +187,34 @@ class Bot:
             if len(args) == 2 and args[1] not in ("1", "2", "3"):
                 raise ValueError("Tier must be 1, 2 or 3.")
             tier = int(args[1]) if len(args) == 2 else 2
+            if (
+                self.store.settings()["monitoring"] == "on"
+                and ticker not in dict(self.store.watchlist())
+                and len(self.store.watchlist()) >= 50
+            ):
+                raise ValueError(
+                    "Free monitoring supports 50 symbols. Turn monitoring off before expanding the watchlist."
+                )
             self.store.add(ticker, tier)
+            self.controls.changed()
             return f"Saved {ticker}, tier {tier}. Use /quote {ticker} to check data availability."
         if command == "remove":
             if len(args) != 1:
                 raise ValueError("Usage: /remove TICKER")
             ticker = symbol(args[0])
-            return (
-                f"Removed {ticker}."
-                if self.store.remove(ticker)
-                else f"{ticker} is not in your watchlist."
-            )
+            removed = self.store.remove(ticker)
+            self.controls.changed()
+            return f"Removed {ticker}." if removed else f"{ticker} is not in your watchlist."
         if command == "quote":
             if len(args) != 1:
                 raise ValueError("Usage: /quote TICKER")
             quote, cached = self.market.quote(symbol(args[0]))
+            if quote.get("provider") == "finnhub":
+                return intraday_text(
+                    quote,
+                    cached=cached,
+                    max_age=int(self.store.settings()["max_source_age_seconds"]),
+                )
             source = "cached" if cached else "fetched now"
             return (
                 f"{quote['ticker']}: {quote['price']:.4f}\n"
@@ -184,6 +227,21 @@ class Bot:
             stocks = self.store.watchlist()
             if not stocks:
                 return "Your watchlist is empty. Use /add IBM 1."
+            if self.store.settings()["market_provider"] == "finnhub":
+                rows = ["Cached Finnhub prices • no API requests"]
+                for ticker, _ in stocks:
+                    quote = self.controls.monitor.latest(ticker) if self.controls.monitor else None
+                    quote = quote or self.store.cached_live("finnhub", ticker)
+                    rows.append(
+                        intraday_text(
+                            quote,
+                            cached=True,
+                            max_age=int(self.store.settings()["max_source_age_seconds"]),
+                        )
+                        if quote
+                        else f"{ticker}: no cached Finnhub observation"
+                    )
+                return "\n\n".join(rows)
             cache = self.store.all_cached_quotes()
             rows = ["Cached watchlist prices • no API requests"]
             for ticker, _tier in stocks:
@@ -233,7 +291,12 @@ class Bot:
             if len(args) != 2:
                 raise ValueError("Usage: /set NAME VALUE. Use /settings to see available names.")
             key, value = args
+            if key in ("market_provider", "monitoring"):
+                return self.controls.handle(
+                    "provider" if key == "market_provider" else "monitor", [value]
+                )
             self.store.set_setting(key, value)
+            self.controls.changed()
             value = self.store.settings()[key]
             return f"Saved {key} = {value}. Applied immediately."
         return "Unknown command. Use /help."

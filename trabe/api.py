@@ -10,8 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from stock_agent import __version__
-from stock_agent.store import Store
+from trabe import __version__
+from trabe.store import Store
 
 
 class ApiError(Exception):
@@ -34,14 +34,17 @@ def message_chunks(text: str, max_units: int = 3500):
         yield text[start:]
 
 
-def request_json(url: str, payload: dict | None = None, timeout: int = 20) -> dict:
+def request_json(
+    url: str, payload: dict | None = None, timeout: int = 20, headers: dict | None = None
+) -> dict:
     data = json.dumps(payload).encode() if payload is not None else None
     request = Request(
         url,
         data=data,
         headers={
             "Content-Type": "application/json",
-            "User-Agent": f"StockPulse/{__version__}",
+            "User-Agent": f"trabe/{__version__}",
+            **(headers or {}),
         },
     )
     try:

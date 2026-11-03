@@ -2,15 +2,42 @@
 
 ## Network and credentials
 
-The Pi uses outbound HTTPS long polling to Telegram and outbound HTTPS for market
-data. It opens no application listener or published container port. Deployment uses
+The Pi uses outbound HTTPS long polling to Telegram and outbound HTTPS/WebSocket
+connections for market data. It opens no application listener or published container port. Deployment uses
 your existing SSH connection, configured locally in `.env.deploy`.
 See Telegram's [getUpdates documentation](https://core.telegram.org/bots/api#getupdates).
 The app refuses to overwrite an existing webhook.
 
-Run `python3 -m stock_agent setup` to create and pair a private `.env`. Daily
+Run `python3 -m trabe setup` to create and pair a private `.env`. Daily
 preferences and the watchlist are managed in Telegram. To change bot/account or
 rotate credentials, update `.env`, re-pair where appropriate, and redeploy.
+
+## Intraday upgrade (0.3)
+
+Add `FINNHUB_API_KEY` privately to `.env` before deploying. The Finnhub webhook
+secret is not needed. The installer stages a checksum-verified pure-Python
+WebSocket dependency and copies it into the ARM image; no new host package is
+required. SQLite schema 3 preserves existing watchlist, settings, usage and replies.
+The pre-deploy database snapshot supports rollback to the previous schema.
+
+After deployment, select `/provider finnhub` and enable `/monitor on` in Telegram.
+Monitoring starts off. `/status` reports subscriptions, session, last source time
+and failures. `/pause 24h` stops automation while manual controls and retention
+continue. `/resume` clears the pause. `/storage` and `/history VST 5` need no
+market requests. See [the README](../README.md) for alert rules and data limits.
+
+## Upgrading to the trabe name (0.2.2)
+
+The Python package and installed command are now `trabe`: use `python3 -m trabe`
+or the installed `trabe` command. Telegram help, status, startup and test messages
+use the same name. Run the usual deployment command below to update the Pi.
+
+Existing installations retain `stock-agent.service`, the `stock-agent` container,
+image tags, configuration paths, `stock-agent-data` volume and `stock_agent.db`
+filename. These identifiers preserve the running installation and its saved data.
+There is no database migration for this rename. The root-owned 0.2.1 launcher is
+accepted by its exact checksum because the new source changes only a comment;
+an already bootstrapped Pi needs no new administrator command.
 
 ## Configure and deploy
 
@@ -86,7 +113,7 @@ as a root-owned mode-0755 file at:
 
 The normal deployment command requests `sudo` authentication for this one-time
 installation if needed. The launcher runs as each user, exits immediately for users
-without StockPulse, and restricts the real generator to this app's private Quadlet
+without trabe, and restricts the real generator to this app's private Quadlet
 directory. It does not read other apps' definitions or replace any installed runtime.
 An existing different launcher at that path causes a stop for review.
 
@@ -145,7 +172,8 @@ bash scripts/inspect-server.sh 2>&1 | tee .local/server-info.log
 2. Back up a running previous SQLite database with SQLite's online backup API.
 3. Retain the previous image/configuration, install definitions and start the service.
 4. Require liveness **and a successful Telegram poll**.
-5. Fetch a fresh IBM quote.
+5. Fetch a fresh IBM quote using the selected provider, and validate GOOGL/VST
+   plus market status when a Finnhub key is present.
 6. Restart the service and compare watchlist/settings fingerprints before and after.
 7. Require an active service and zero published ports, then send the deployment
    confirmation to Telegram.
@@ -156,8 +184,9 @@ the older release. The snapshot is retained. Failed builds or backups leave the
 running release untouched. New data entered during a failed rollout can be lost
 when its pre-deploy snapshot is restored.
 
-The test uses one fresh market request. Its IBM cache remains available for the
-next `/quote IBM`. The previous prototype's database is not automatically imported.
+Diagnostics count provider attempts normally and cache their quotes. Finnhub
+validation may need profile requests as well as quotes. The previous prototype's
+database is not automatically imported.
 
 ## Telegram acceptance check
 
@@ -194,7 +223,7 @@ enable it later with `/schedule 23:00`, and disable it with `/schedule off`.
 ```sh
 systemctl --user status stock-agent.service
 journalctl --user -u stock-agent.service -n 80 --no-pager
-podman exec stock-agent python -m stock_agent health --ready
+podman exec stock-agent python -m trabe health --ready
 podman inspect stock-agent --format '{{.State.Health.Status}}'
 podman port stock-agent
 systemctl --user restart stock-agent.service
@@ -212,7 +241,7 @@ ownership for that container user. Logs go to journald.
 Consistent private online backup:
 
 ```sh
-podman exec stock-agent python -m stock_agent backup --output /data/manual-backup.sqlite3
+podman exec stock-agent python -m trabe backup --output /data/manual-backup.sqlite3
 podman cp stock-agent:/data/manual-backup.sqlite3 ./manual-backup.sqlite3
 chmod 600 ./manual-backup.sqlite3
 ```
@@ -220,6 +249,12 @@ chmod 600 ./manual-backup.sqlite3
 Choose a new destination filename for each backup. Pre-deployment backups live in
 `/data/backups/`. Keep credentials backed up separately and never delete the named
 volume during an update.
+
+Automatic backups are pruned to three retained snapshots plus one protected while
+deployment/rollback is active, and expire after three calendar months. Maintenance
+shares the protection lock with deployment. Manual snapshots are not pruned.
+Session rollup runs at close plus ten minutes and deletes minute detail atomically;
+retention catches up after downtime or restoration even when monitoring is off.
 
 ## Failure behavior
 

@@ -9,15 +9,16 @@ import tempfile
 import time
 from pathlib import Path
 
-from stock_agent.api import Telegram
-from stock_agent.config import read_env
+from trabe.api import Telegram
+from trabe.config import read_env
 
 
-def write_credentials(path: Path, token: str, owner: int, key: str):
+def write_credentials(path: Path, token: str, owner: int, key: str, finnhub_key: str = ""):
     path.parent.mkdir(parents=True, exist_ok=True)
     text = (
         f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_CHAT_ID={owner}\n"
-        f"ALPHA_VANTAGE_API_KEY={key}\nDATABASE_PATH=data/stock_agent.db\n"
+        f"ALPHA_VANTAGE_API_KEY={key}\nFINNHUB_API_KEY={finnhub_key}\n"
+        "DATABASE_PATH=data/stock_agent.db\n"
     )
     # Atomic replacement and mode 0600, even if an existing file is more permissive.
     fd, temporary = tempfile.mkstemp(prefix=".env-setup-", dir=path.parent)
@@ -37,6 +38,7 @@ def setup(path: Path):
         or getpass.getpass("BotFather token (hidden): ").strip()
     )
     key = values.get("ALPHA_VANTAGE_API_KEY", "").strip()
+    finnhub_key = values.get("FINNHUB_API_KEY", "").strip()
     if not key:
         key = getpass.getpass("Alpha Vantage key (hidden; Enter to configure later): ").strip()
     # Validate without storing or exposing the supplied secrets.
@@ -44,6 +46,8 @@ def setup(path: Path):
         raise ValueError("Bot token format is invalid; copy the complete token from BotFather.")
     if key and not re.fullmatch(r"[A-Za-z0-9_-]+", key):
         raise ValueError("API key contains invalid characters.")
+    if finnhub_key and not re.fullmatch(r"[A-Za-z0-9_-]+", finnhub_key):
+        raise ValueError("Finnhub API key contains invalid characters.")
     telegram = Telegram(token)
     me = telegram.call("getMe")
     if telegram.call("getWebhookInfo").get("url"):
@@ -73,7 +77,7 @@ def setup(path: Path):
                 and isinstance(text, str)
                 and hmac.compare_digest(text.encode(), challenge.encode())
             ):
-                write_credentials(path, token, owner, key)
+                write_credentials(path, token, owner, key, finnhub_key)
                 print(
                     f"Credentials saved to {path} with mode 0600. Confirming Telegram delivery…",
                     flush=True,
@@ -82,7 +86,7 @@ def setup(path: Path):
                 telegram.updates(offset, timeout=0)
                 telegram.send(
                     owner,
-                    "✅ Your private account is paired. Deploy StockPulse Sentinel, then send /status.",
+                    "✅ Your private account is paired. Deploy trabe, then send /status.",
                 )
                 print(f"Paired successfully. Credentials saved to {path} with mode 0600.")
                 return

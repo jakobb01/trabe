@@ -15,13 +15,13 @@ trap cleanup EXIT
 python3 - "$bundle_dir/agent.env" <<'PY'
 import sys
 from pathlib import Path
-from stock_agent.config import Config
-from stock_agent.setup import write_credentials
+from trabe.config import Config
+from trabe.setup import write_credentials
 try:
     config = Config.load()
-    if not config.api_key:
-        raise ValueError('Set ALPHA_VANTAGE_API_KEY before the test deployment.')
-    write_credentials(Path(sys.argv[1]), config.token, config.owner_id, config.api_key)
+    if not config.api_key and not config.finnhub_key:
+        raise ValueError('Configure a market provider key before deployment.')
+    write_credentials(Path(sys.argv[1]), config.token, config.owner_id, config.api_key, config.finnhub_key)
 except ValueError as error:
     raise SystemExit(str(error)) from None
 PY
@@ -36,6 +36,7 @@ selected_mode=native
 while IFS= read -r line; do
     if [[ "$line" == STOCK_AGENT_QUADLET_MODE=bundled ]]; then selected_mode=bundled; fi
 done < "$bundle_dir/preflight.log"
+python3 scripts/prepare_runtime.py
 python3 - "$bundle_dir/source" <<'PY'
 import shutil,sys
 from pathlib import Path
@@ -43,7 +44,7 @@ destination=Path(sys.argv[1])
 destination.mkdir()
 for name in ('Containerfile','.containerignore','pyproject.toml'):
     shutil.copy2(name,destination/name)
-for name in ('stock_agent','deploy'):
+for name in ('trabe','deploy'):
     shutil.copytree(name,destination/name,ignore=shutil.ignore_patterns('__pycache__'))
 PY
 if [[ "$selected_mode" == bundled ]]; then
@@ -60,8 +61,15 @@ if [[ "$selected_mode" == bundled ]]; then
         target_file=/usr/local/lib/systemd/user-generators/stock-agent-quadlet
         if test -e "$target_file"; then
             if ! cmp -s "$source_file" "$target_file"; then
-                echo "A different StockPulse generator launcher already exists. Review it before replacing it." >&2
-                exit 1
+                # 0.2.2 only renames a comment in the 0.2.1 launcher. Accept this
+                # exact pair without replacing the already installed root file.
+                if ! printf "%s  %s\n" \
+                    c8440032a359091c1e834f29b0d75576187c7420aa99e2ebec27827fd1d3700c "$source_file" \
+                    b828bc2d909124b0595fdcf8f6bcfe2f85238d124bdda522a7538929a9ef5fb0 "$target_file" \
+                    | sha256sum -c --status; then
+                    echo "A different trabe generator launcher already exists. Review it before replacing it." >&2
+                    exit 1
+                fi
             fi
         else
             echo "Installing the app-scoped Quadlet launcher; sudo may request your password."
@@ -81,7 +89,7 @@ shutil.copy2(source,destination/'quadlet')
 PY
 fi
 tar -czf "$bundle_dir/source.tar.gz" -C "$bundle_dir/source" \
-    Containerfile .containerignore pyproject.toml stock_agent deploy
+    Containerfile .containerignore pyproject.toml trabe deploy
 tar -czf "$bundle_dir/bundle.tar.gz" -C "$bundle_dir" agent.env source.tar.gz
 ssh "${ssh_args[@]}" "$ssh_target" '
     set -eu

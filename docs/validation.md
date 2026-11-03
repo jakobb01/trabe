@@ -4,13 +4,85 @@
 
 Install development dependencies and run the commands in
 [CONTRIBUTING.md](../CONTRIBUTING.md). Unit and HTTP integration tests need no real
-credentials. HTTP fixtures enforce provider pacing and exercise real urllib
+credentials. HTTP/WebSocket fixtures enforce provider pacing and exercise real urllib
 requests over loopback, Telegram authorization, commands, background scans,
 cached quotes, settings and durable state through a process restart.
 
 The container script runs the suites in the production image with no external
 networking, a read-only root filesystem, no capabilities and a 256 MB memory limit.
-For isolated Podman storage, set `CHECK_RUNTIME_ROOT=/tmp/stockpulse-check`.
+For isolated Podman storage, set `CHECK_RUNTIME_ROOT=/tmp/trabe-check`.
+
+## Intraday release: 0.3 (2026-11-03)
+
+The release passes 118 unit/deployment/tooling tests natively on Python 3.13 and
+in the production container. All three HTTP/WebSocket runtime tests pass in the
+native image and the ARMv7 production image under QEMU. These use fixture
+credentials and isolated databases, including on the Pi; they never send synthetic
+financial alerts to the real owner.
+
+The streaming fixture verifies an intra-minute breach followed by recovery,
+exactly one durable event, rapid remove/re-add, watchlist reconciliation,
+reconnect and malformed frames, a single active socket, owner authorization,
+pause across restart, local controls without provider calls, and resume without
+another session alert. Unit checks cover transactional rollback/concurrency,
+mixed feeds/currencies/baselines, source age, no-data/partial rollups, holidays,
+early close/DST, calendar expiry, month-end/leap retention, protected backups,
+low storage and a busy WAL reader followed by successful checkpoint recovery.
+
+A populated schema-2 database was upgraded, restored from its online snapshot,
+and reopened by the previous 0.2.2 image. Watchlist, settings, request usage and a
+pending reply survived. The new `backup-prune` CLI preserved the restored schema
+without opening/migrating it. Simulated installer failures also exercise rollback.
+
+The eight-session, 50-stock production-code soak processed 156,000 observations
+under a 256 MiB container memory limit. Native peak RSS was 30,412,800 bytes;
+the sampled DB/WAL/shared-memory peak was 1,970,176 bytes. The ARMv7 QEMU run
+processed the same eight sessions with peak RSS 62,959,616 bytes including the
+emulator. Finalized sessions left no minute
+rows, retained 400 daily rows, reused pages and then removed all expired history.
+This is an eight-session soak, separate from the synthetic three-month capacity
+model; container images, host logs and backups are excluded from those numbers.
+
+The installed 0.3 wheel includes the calendar JSON and works with the pinned
+`websocket-client==1.9.2` wheel. Runtime staging verifies both the downloaded wheel
+SHA256 and the extracted tree. ARM builds execute no target-CPU pip/apt step.
+Ruff, shell syntax, whitespace and Podman 4.3 Quadlet parser checks pass. The
+Git candidate files contain none of the configured credential values.
+
+Real free-account checks returned current GOOGL/VST REST quotes, verified US
+market status and fresh WebSocket trades. The split endpoint returned HTTP 403;
+the opening-gap baseline guard is therefore a conservative safeguard, not a
+claim of comprehensive corporate-action coverage. Source clock skew of up to
+two seconds is tolerated; the default maximum source age is 120 seconds.
+
+The final physical Pi deployment passed readiness, market API checks, restart
+persistence, Telegram delivery and zero published ports. Its application-source
+fingerprint matches the workspace. Schema 3 preserved the existing watchlist and
+preferences. The owner selected Finnhub and enabled monitoring through Telegram;
+both settings survived the final deployment restart.
+
+The running Pi stream subscribed to GOOGL, NVDA and VST with validated baselines
+and no symbol issues. Source-to-receipt lag in the persisted samples was below
+one second. The final inspection found 15 minute observations, a 163,840-byte
+database and healthy maintenance. Daily summaries are initially empty until the
+actual close plus ten minutes. New controls were also exercised in the isolated
+runtime fixtures above; remaining interactive exploration is in the
+[Telegram test guide](try-0.3.md). No additional broad Pi test suite was run.
+
+## trabe rename: 0.2.2 (2026-11-03)
+
+The renamed Python package and CLI passed all 88 tests natively and all 88 tests
+inside the production container. Both real-HTTP integration tests passed in that
+container. A wheel was built, installed into an isolated directory and its
+`trabe --help` command executed successfully. Ruff lint/formatting, shell syntax
+and the Podman 4.3 Quadlet parser check passed.
+
+The actual remote launcher guard was exercised with the current launcher, the
+deployed 0.2.1 launcher and two modified-file controls. Both known versions were
+accepted without modifying the installed file; unexpected source/target changes
+were rejected. The launcher body, service/data paths and database schema remain
+unchanged. These are historical local checks; the Pi upgraded directly to 0.3.
+Later milestones in the [roadmap](next-features.md) remain planning work.
 
 ## GitHub preparation: 2026-11-03
 
@@ -47,7 +119,7 @@ The ARM application suites exclude deployment/tool-preparation subprocess tests;
 those run natively. Earlier 0.2.0 checks also verified Python 3.11 compatibility,
 wheel installation, SQLite schema 1-to-2 migration, image/source agreement and
 the runtime restrictions below. Those records are historical; run the current
-suites when changing the code. GitHub Actions has not yet run for this repository.
+suites when changing the code. Local results are separate from GitHub Actions runs.
 
 ## Runtime and deployment checks
 
@@ -74,12 +146,14 @@ waits 1.1 seconds between uncached requests, and recognizes rate-limit notices
 returned with HTTP 200. Cache hits spend no requests. Live diagnosis returned a
 valid VST quote; a second immediate request received the explicit rate notice.
 
-## Remaining acceptance
+## Historical baseline acceptance
 
 The user confirmed `/status`, `/menu`, watchlist additions and watchlist display on
 the physical Pi. The 0.2.1 rollout passed its automated gates. User confirmation of
 the repeated GOOGL/VST scan remains pending, as does physical reboot verification
-during an appropriate maintenance window.
+during an appropriate maintenance window. These older open checks do not imply
+that the physical host was rebooted for the 0.3 deployment; its service restart
+and state persistence were verified.
 
 Local logs, private state snapshots, downloaded tools and image archives stay in
 ignored local storage. They are not needed to clone the source or run the tests.

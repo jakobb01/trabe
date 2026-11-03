@@ -1,5 +1,5 @@
 [Unit]
-Description=StockPulse Sentinel Telegram agent
+Description=trabe Telegram agent
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=0
@@ -17,7 +17,7 @@ NoNewPrivileges=true
 DropCapability=all
 StopTimeout=60
 PodmanArgs=--pids-limit=128
-HealthCmd=python -m stock_agent health
+HealthCmd=python -m trabe health
 HealthInterval=60s
 HealthTimeout=10s
 HealthRetries=3

@@ -70,9 +70,13 @@ class Controls:
                     or not client.verified()
                 ):
                     raise ValueError("Select and verify Finnhub first: /provider finnhub")
-                count = len(self.store.watchlist())
+                from trabe.ledger import Ledger
+
+                count = len(Ledger(self.store).coverage())
                 if not 1 <= count <= 50:
-                    raise ValueError("Monitoring needs 1–50 watchlist symbols on the free plan.")
+                    raise ValueError(
+                        "Monitoring needs 1–50 held and watched symbols together on the free plan."
+                    )
                 USCalendar().at(time.time())
                 if self.store.state("storage_paused"):
                     raise ValueError("Storage maintenance needs attention first. Use /storage.")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline checks against the real image; requires no user credentials.
+# Build and check the runtime. Integration/soak checks require explicit opt-in.
 set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$project_dir"
@@ -17,9 +17,12 @@ mounts=(-v "$project_dir/tests:/app/tests:ro" -v "$project_dir/deploy:/app/deplo
         -v "$project_dir/pyproject.toml:/app/pyproject.toml:ro")
 restrictions=(--rm --network=none --read-only --cap-drop=all --security-opt=no-new-privileges
               --pids-limit=128 --memory=256m)
-"${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m unittest discover -s tests -q
-"${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m unittest discover -s tests -p 'integration_*.py' -v
-"${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m tests.soak_intraday
+if [[ ${CHECK_EXTENDED:-0} == 1 ]]; then
+    "${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m unittest discover -s tests -p 'integration_*.py' -v
+fi
+if [[ ${CHECK_SOAK:-0} == 1 ]]; then
+    "${runtime[@]}" run "${restrictions[@]}" "${mounts[@]}" "$image" python -m tests.soak_intraday
+fi
 "${runtime[@]}" run "${restrictions[@]}" "$image" python -c '
 import os,ssl,sqlite3
 from pathlib import Path

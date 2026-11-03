@@ -5,13 +5,12 @@ It runs on a Debian/Raspbian Raspberry Pi with Podman Quadlet and SQLite. It nee
 outbound HTTPS/WebSocket connections and your existing SSH connection;
 **no website or new inbound port**.
 
-Version 0.3 adds Finnhub intraday monitoring, durable dip alerts, per-stock rules,
-pause/resume, daily observed-price history and automatic retention. It retains the
-button menu, saved watchlist/preferences, background scans and optional weekday
-summary. Earnings, insider feeds and AI briefings come later.
-The service never places trades.
+Version 0.4 adds a durable transaction ledger, EUR/USD portfolio valuation and
+optional daily progress messages. Finnhub monitoring, dip alerts, pause/resume,
+watchlists and preferences remain available. The service records trades you have
+already made; it never places orders.
 
-The [feature roadmap](docs/next-features.md) defines the release scope. The
+The [feature roadmap](docs/next-features.md) defines the next releases. The
 [storage plan](docs/storage-and-retention.md) keeps minute detail during the session,
 rolls it into compact daily summaries and expires history after three months.
 The [provider research](docs/market-data-research.md) compares Finnhub, Alpaca,
@@ -49,11 +48,17 @@ one small root-owned launcher installed with `sudo`; no OS upgrade is performed.
 Send `/menu` for persistent buttons. Only the paired user in their private chat can
 read or change the app's configuration.
 
-Follow the [0.3 Telegram test guide](docs/try-0.3.md) for the first intraday session.
+See the [0.4 release notes](docs/release-0.4.md) for portfolio setup and the post-deployment walkthrough.
 
 | Command | Effect |
 | --- | --- |
 | `/menu`, `/help` | Show controls and help |
+| `/currency EUR`, `/currency USD` | Set default input and reporting currency |
+| `/buy GOOGL 5 100 EUR`, `/sell GOOGL 2 125 EUR` | Record executed trades, with optional date and `fee=1.50` |
+| `/portfolio`, `/position GOOGL` | Show cached valuations and position results |
+| `/trades GOOGL`, `/trade_void ID` | List transactions and void an incorrect entry |
+| `/position_adjust GOOGL 10`, `/basis_adjust GOOGL 500 EUR` | Record explicit quantity or remaining-basis corrections |
+| `/portfolio_summary 23:00`, `/portfolio_summary off` | Enable/disable daily portfolio progress |
 | `/status` | Service health, watchlist size, scan state and request budget |
 | `/test` | Confirm message delivery |
 | `/watchlist` | List symbols and tiers |
@@ -80,6 +85,8 @@ saved organizational label; it does not change alert severity in this release.
 
 | Preference | Default | Allowed values |
 | --- | --- | --- |
+| `default_currency` | `EUR` | `EUR` or `USD` |
+| `portfolio_summary_time` | `off` | `HH:MM` or `off` |
 | `timezone` | `Europe/Ljubljana` | IANA timezone, e.g. `America/New_York` |
 | `quote_cache_minutes` | `60` | 1–1440 |
 | `api_daily_budget` | `20` | 1–25 |
@@ -92,6 +99,35 @@ saved organizational label; it does not change alert severity in this release.
 Example: `/set dip_threshold_percent -5`. Settings and the watchlist persist in
 SQLite and apply immediately. Credentials are bootstrap configuration, entered
 locally; do not send API keys to the bot.
+
+## Portfolio and FX
+
+Trade syntax is `TICKER QUANTITY PRICE [CURRENCY] [YYYY-MM-DD] [fee=AMOUNT]`.
+Currency defaults to `/currency`; the date defaults to today in the configured
+timezone. Quantity and price are positive decimals; fees are nonnegative and in
+the transaction currency. Corrections retain audit history. A sale or correction
+that would make any later sale exceed the available shares is rejected.
+
+Held and watched symbols share the 50-symbol Finnhub subscription allowance.
+Removing a watchlist symbol keeps its position and price coverage; it no longer
+receives watchlist dip alerts. `/portfolio` and `/position` use cached Finnhub
+observations and report missing or stale data; they never request a quote.
+
+The background worker shares daily [Frankfurter/ECB reference rates](https://frankfurter.dev/v1/).
+It uses the published rate on or before an execution date, retains direction and
+provenance with each trade, and declines rates more than seven calendar days old.
+Same-day cross-currency transaction cost is pending until after UTC midnight, so
+the completed execution-date reference can be saved. Current FX is checked at
+most hourly while needed. Reference rates differ from broker execution rates and
+spreads. A currency change changes presentation and new input defaults, never
+original trade amounts. Returns include currency movement and recorded fees.
+
+`/portfolio_summary 23:00` opts into daily summaries in the saved timezone;
+`/pause` suppresses automatic delivery while manual reports remain available.
+Progress compares positions with unchanged trade histories and excludes changed
+or unavailable positions, so purchases and sales are not treated as gains.
+Transactions and their FX provenance do not expire; compact daily snapshots
+expire after three calendar months.
 
 ## Data freshness, costs and scheduling
 
@@ -158,18 +194,16 @@ analysis and AI summaries remain future work.
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
-python3 -m unittest discover -s tests -v
-python3 -m unittest discover -s tests -p 'integration_*.py' -v
+python3 -m unittest discover -s tests -q
 ruff check trabe scripts tests
 ruff format --check trabe scripts tests
-bash scripts/check-container.sh
-python3 scripts/check_quadlet.py
 ```
 
-The container check uses no real credentials or internet from inside the test
-containers. Its loopback HTTP fixture exercises actual HTTP requests, commands,
-background scans, SQLite state and a process restart. ARM validation and recorded
-results are described in [validation notes](docs/validation.md).
+For an iteration, run the relevant unit file/case and checks on changed files.
+Default CI runs basic checks once on Python 3.13. Integration/container checks,
+ARM validation and storage soaks are opt-in; see the
+[testing policy](CONTRIBUTING.md#testing-policy). Historical verification is
+recorded in [validation notes](docs/validation.md).
 
 Live maintenance tools (use only one poller per bot):
 

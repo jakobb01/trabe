@@ -3,13 +3,15 @@
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from trabe import __version__
 from trabe.api import ApiError, MarketData, Telegram
 from trabe.config import Config
 from trabe.controls import Controls, intraday_text
+from trabe.ledger import Ledger
+from trabe.portfolio import Portfolio
 from trabe.preferences import DESCRIPTIONS
 from trabe.scans import Scans
 from trabe.store import Store
@@ -24,6 +26,16 @@ COMMANDS = [
     ("add", "Add symbol: /add IBM 1"),
     ("remove", "Remove symbol: /remove IBM"),
     ("quote", "Market API check: /quote IBM"),
+    ("currency", "Show or set default currency: EUR or USD"),
+    ("buy", "Record a purchase"),
+    ("sell", "Record a sale"),
+    ("trades", "Show transaction history"),
+    ("trade_void", "Void a transaction"),
+    ("position", "Show a position"),
+    ("portfolio", "Show recorded holdings"),
+    ("portfolio_summary", "Schedule daily portfolio progress"),
+    ("position_adjust", "Adjust position quantity after a split"),
+    ("basis_adjust", "Correct remaining position cost basis"),
     ("settings", "Show current preferences"),
     ("set", "Change a preference"),
     ("test", "Confirm Telegram delivery"),
@@ -46,6 +58,7 @@ MENU = {
         ["Status", "Watchlist"],
         ["Cached prices", "Scan watchlist"],
         ["Settings", "Help"],
+        ["Portfolio", "Currency"],
         ["Monitor on", "Monitor off"],
         ["Alerts", "Storage"],
         ["Pause 24h", "Resume"],
@@ -61,6 +74,8 @@ BUTTONS = {
     "Scan watchlist": "/scan",
     "Settings": "/settings",
     "Help": "/help",
+    "Portfolio": "/portfolio",
+    "Currency": "/currency",
     "Monitor on": "/monitor on",
     "Monitor off": "/monitor off",
     "Alerts": "/alerts",
@@ -89,6 +104,16 @@ HELP = """trabe
 /storage — local data, backups and maintenance
 /schedule HH:MM — opt into a weekday daily summary
 /schedule off — turn off scheduled checks
+/currency [EUR|USD] — show or set default currency
+/buy TICKER QUANTITY PRICE [EUR|USD] [YYYY-MM-DD] [fee=AMOUNT]
+/sell TICKER QUANTITY PRICE [EUR|USD] [YYYY-MM-DD] [fee=AMOUNT]
+/trades TICKER — list transactions
+/trade_void ID — void a transaction
+/position TICKER — show recorded position
+/portfolio — show recorded positions
+/portfolio_summary HH:MM|off — daily portfolio progress
+/position_adjust TICKER QUANTITY [YYYY-MM-DD] — adjust share count, preserving basis
+/basis_adjust TICKER AMOUNT [EUR|USD] [YYYY-MM-DD] — correct remaining cost basis
 /settings — show preferences
 /set timezone Europe/Ljubljana
 /set quote_cache_minutes 60
@@ -106,6 +131,18 @@ def symbol(value: str) -> str:
     return value
 
 
+def trade_date(value, timezone):
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        raise ValueError("Use a date in YYYY-MM-DD format.") from None
+    if parsed.isoformat() != value:
+        raise ValueError("Use a date in YYYY-MM-DD format.")
+    if parsed > datetime.now(ZoneInfo(timezone)).date():
+        raise ValueError("Trade date cannot be in the future.")
+    return value
+
+
 class Bot:
     def __init__(
         self, config: Config, store: Store, telegram: Telegram, market: MarketData, *, monitor=None
@@ -113,6 +150,9 @@ class Bot:
         self.config, self.store, self.telegram, self.market = config, store, telegram, market
         self.started = time.monotonic()
         self.username = ""
+        self.ledger = Ledger(store)
+        self.portfolio = Portfolio(store, monitor)
+        self.update_id = None
         self.scans = Scans(store, market)
         self.controls = Controls(config, store, market, monitor)
 
@@ -140,9 +180,12 @@ class Bot:
         if target and target.lower() != self.username.lower():
             return
         try:
+            self.update_id = update.get("update_id")
             reply = self.command(command.lower(), parts[1:])
         except (ValueError, ApiError) as error:
             reply = str(error)  # Only our sanitized errors reach this boundary.
+            if command.lower() in ("buy", "sell"):
+                reply += "\nExample: /buy GOOGL 5 100 EUR 2026-11-03 fee=1"
         if command.lower() in ("start", "help", "menu"):
             self.telegram.send(self.config.owner_id, reply, reply_markup=MENU)
         else:
@@ -189,8 +232,8 @@ class Bot:
             tier = int(args[1]) if len(args) == 2 else 2
             if (
                 self.store.settings()["monitoring"] == "on"
-                and ticker not in dict(self.store.watchlist())
-                and len(self.store.watchlist()) >= 50
+                and ticker not in self.ledger.coverage()
+                and len(self.ledger.coverage()) >= 50
             ):
                 raise ValueError(
                     "Free monitoring supports 50 symbols. Turn monitoring off before expanding the watchlist."
@@ -204,6 +247,10 @@ class Bot:
             ticker = symbol(args[0])
             removed = self.store.remove(ticker)
             self.controls.changed()
+            if removed and ticker in self.ledger.held():
+                return (
+                    f"Removed {ticker} from the watchlist; its position and price coverage remain."
+                )
             return f"Removed {ticker}." if removed else f"{ticker} is not in your watchlist."
         if command == "quote":
             if len(args) != 1:
@@ -278,6 +325,125 @@ class Bot:
                 f"Weekday summary scheduled at {value} ({self.store.settings()['timezone']}). "
                 "One scan per local date, within your API budget. Use /schedule off to disable it."
             )
+        if command in ("buy", "sell"):
+            usage = "Usage: /buy GOOGL 5 100 EUR 2026-11-03 fee=1 (currency, date and fee optional)"
+            if not 3 <= len(args) <= 6:
+                raise ValueError(usage)
+            ticker = symbol(args[0])
+            currency = self.store.settings()["default_currency"]
+            day = datetime.now(ZoneInfo(self.store.settings()["timezone"])).date().isoformat()
+            fee = "0"
+            extra = list(args[3:])
+            if extra and extra[0].upper() in ("EUR", "USD"):
+                currency = extra.pop(0).upper()
+            if extra and not extra[0].startswith("fee="):
+                day = extra.pop(0)
+            if extra and extra[0].startswith("fee="):
+                fee = extra.pop(0)[4:]
+            if extra:
+                raise ValueError(usage)
+            trade_date(day, self.store.settings()["timezone"])
+            trade_id = self.ledger.record(
+                ticker, command, args[1], args[2], currency, day, fee, self.update_id
+            )
+            self.controls.changed()
+            from decimal import Decimal
+
+            gross = Decimal(args[1]) * Decimal(args[2])
+            total = gross + Decimal(fee) if command == "buy" else gross - Decimal(fee)
+            return (
+                f"Recorded {command} #{trade_id}: {ticker} {args[1]} shares at {args[2]} {currency}; "
+                f"total {total} {currency} including fee {fee} {currency}, date {day}. "
+                "FX conversion may be pending; this records a trade and does not place an order."
+            )
+        if command == "trade_void":
+            if len(args) != 1 or not args[0].isdigit():
+                raise ValueError("Usage: /trade_void ID")
+            ticker = self.ledger.void(int(args[0]))
+            self.controls.changed()
+            return f"Voided trade #{args[0]} for {ticker}; its audit record is retained."
+        if command == "trades":
+            if len(args) != 1:
+                raise ValueError("Usage: /trades TICKER")
+            ticker = symbol(args[0])
+            rows = self.ledger.history(ticker)
+            return (
+                "\n".join(
+                    [f"Transactions for {ticker}:"]
+                    + [
+                        (
+                            f"#{i} quantity adjusted to {qty} on {day}"
+                            if side == "adjust"
+                            else f"#{i} basis adjusted to {price} {currency} on {day}"
+                            if side == "basis"
+                            else f"#{i} {side} {qty} at {price} {currency}, fee {fee}, {day} • "
+                            + (
+                                f"1 {currency} = {rate} {'USD' if currency == 'EUR' else 'EUR'}; {provider}, effective {fx_day}, retrieved {datetime.fromtimestamp(float(retrieved), ZoneInfo('UTC')).isoformat()}"
+                                if rate
+                                else "historical FX pending"
+                            )
+                        )
+                        + (" • VOID" if voided else "")
+                        for i, side, qty, price, currency, day, fee, voided, rate, fx_day, provider, retrieved in rows
+                    ]
+                )
+                if rows
+                else f"No transactions for {ticker}."
+            )
+        if command in ("portfolio", "position"):
+            if (command == "portfolio" and args) or (command == "position" and len(args) != 1):
+                raise ValueError("Usage: /portfolio or /position TICKER")
+            return self.portfolio.report(symbol(args[0]) if args else None)
+        if command == "portfolio_summary":
+            if len(args) != 1:
+                raise ValueError("Usage: /portfolio_summary 23:00 or /portfolio_summary off")
+            self.store.set_setting("portfolio_summary_time", args[0])
+            return f"Portfolio summary: {self.store.settings()['portfolio_summary_time']} ({self.store.settings()['timezone']})."
+        if command == "position_adjust":
+            if not 2 <= len(args) <= 3:
+                raise ValueError("Usage: /position_adjust TICKER NEW_QUANTITY [YYYY-MM-DD]")
+            ticker = symbol(args[0])
+            day = (
+                args[2]
+                if len(args) == 3
+                else datetime.now(ZoneInfo(self.store.settings()["timezone"])).date().isoformat()
+            )
+            trade_date(day, self.store.settings()["timezone"])
+            trade_id = self.ledger.record(
+                ticker,
+                "adjust",
+                args[1],
+                "1",
+                self.store.settings()["default_currency"],
+                day,
+                update_id=self.update_id,
+            )
+            self.controls.changed()
+            return f"Recorded quantity adjustment #{trade_id}: {ticker} to {args[1]} shares on {day}; existing total cost basis retained."
+        if command == "basis_adjust":
+            if not 2 <= len(args) <= 4:
+                raise ValueError("Usage: /basis_adjust TICKER AMOUNT [EUR|USD] [YYYY-MM-DD]")
+            ticker = symbol(args[0])
+            currency = self.store.settings()["default_currency"]
+            day = datetime.now(ZoneInfo(self.store.settings()["timezone"])).date().isoformat()
+            extra = list(args[2:])
+            if extra and extra[0].upper() in ("EUR", "USD"):
+                currency = extra.pop(0).upper()
+            if extra:
+                day = extra.pop(0)
+            if extra:
+                raise ValueError("Usage: /basis_adjust TICKER AMOUNT [EUR|USD] [YYYY-MM-DD]")
+            trade_date(day, self.store.settings()["timezone"])
+            trade_id = self.ledger.record(
+                ticker, "basis", "1", args[1], currency, day, update_id=self.update_id
+            )
+            return f"Recorded basis adjustment #{trade_id}: {ticker} remaining basis {args[1]} {currency} on {day}."
+        if command == "currency":
+            if len(args) > 1:
+                raise ValueError("Usage: /currency [EUR|USD]")
+            if args:
+                self.store.set_setting("default_currency", args[0])
+            return f"Default currency: {self.store.settings()['default_currency']}"
         if command == "settings":
             return (
                 "Preferences:\n"

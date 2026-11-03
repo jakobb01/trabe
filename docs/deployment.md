@@ -12,6 +12,19 @@ Run `python3 -m trabe setup` to create and pair a private `.env`. Daily
 preferences and the watchlist are managed in Telegram. To change bot/account or
 rotate credentials, update `.env`, re-pair where appropriate, and redeploy.
 
+## Position upgrade (0.4)
+
+SQLite schema 4 adds the transaction ledger, FX cache and portfolio snapshots;
+existing credentials, watchlist, preferences, price data and queued replies are
+preserved. The installer creates its usual online backup before replacement and
+restores it if rollout fails. No inbound port is added. Daily FX lookups require
+outbound HTTPS to `api.frankfurter.dev` in addition to the existing providers.
+
+Run the existing deployment command from the local project directory, not by
+starting another poller on the Pi. After deployment, use the walkthrough in the
+[0.4 release notes](release-0.4.md). The deployment script already checks a
+restart and persistence; avoid a second restart solely for this walkthrough.
+
 ## Intraday upgrade (0.3)
 
 Add `FINNHUB_API_KEY` privately to `.env` before deploying. The Finnhub webhook

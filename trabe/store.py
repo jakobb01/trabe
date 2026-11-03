@@ -11,7 +11,7 @@ from pathlib import Path
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class Store(MarketStorage):
@@ -58,6 +58,13 @@ class Store(MarketStorage):
             db.execute("BEGIN IMMEDIATE")
             for statement in SCHEMA:
                 db.execute(statement)
+            trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
+            for column in ("fx_from", "fx_to"):
+                if column not in trade_columns:
+                    db.execute(f"ALTER TABLE trades ADD COLUMN {column} TEXT")
+            db.execute("""UPDATE trades SET fx_from=currency,
+                fx_to=CASE currency WHEN 'EUR' THEN 'USD' ELSE 'EUR' END
+                WHERE fx_rate IS NOT NULL AND (fx_from IS NULL OR fx_to IS NULL)""")
             if "kind" not in {row[1] for row in db.execute("PRAGMA table_info(outbox)")}:
                 db.execute("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'reply'")
             db.executemany("INSERT OR IGNORE INTO settings VALUES (?, ?)", DEFAULTS.items())

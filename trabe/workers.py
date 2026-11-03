@@ -4,8 +4,10 @@ import logging
 import threading
 
 from trabe.api import ApiError
+from trabe.fx import FX
 from trabe.maintenance import Maintenance
 from trabe.monitor import Monitor
+from trabe.portfolio import Portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ class Services:
         )
         if self.monitor:
             market.monitor = self.monitor
+        self.fx = FX(store)
+        self.portfolio = Portfolio(store, self.monitor)
         self.threads = []
 
     def start(self):
@@ -28,6 +32,7 @@ class Services:
         for target, name in (
             (self.deliver, "telegram-delivery"),
             (self.maintain, "storage-maintenance"),
+            (self.portfolio_work, "portfolio-work"),
         ):
             thread = threading.Thread(target=target, daemon=True, name=name)
             thread.start()
@@ -72,6 +77,16 @@ class Services:
                         )
                 except Exception:
                     pass
+
+    def portfolio_work(self):
+        while not self.stop.is_set():
+            try:
+                if not self.store.automation_paused():
+                    self.fx.refresh()
+                self.portfolio.schedule(self.config.owner_id, self.outbox)
+            except Exception:
+                logger.error("Portfolio background work failed; retry scheduled.")
+            self.stop.wait(60)
 
     def close(self):
         if self.monitor:

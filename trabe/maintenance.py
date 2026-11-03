@@ -178,6 +178,7 @@ class Maintenance:
                 ("daily_runs", "day"),
                 ("api_usage", "day"),
                 ("provider_usage", "day"),
+                ("portfolio_snapshots", "day"),
             ):
                 db.execute(f"DELETE FROM {table} WHERE {column}<=?", (str(cutoff),))
             db.execute("DELETE FROM scan_jobs WHERE status!='running' AND created_at<?", (end,))

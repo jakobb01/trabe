@@ -166,7 +166,7 @@ wait_ready
 # Validate the market API first. Announce deployment only after restart succeeds.
 podman exec stock-agent python -m trabe doctor --market --validate-finnhub
 # A real restart must preserve the watchlist and all user preferences.
-state_digest='import hashlib,json,os; from pathlib import Path; from trabe.store import Store; store=Store(Path(os.environ["DATABASE_PATH"])); data={"settings":store.settings(),"watchlist":store.watchlist()}; print(hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest())'
+state_digest='import hashlib,json,os; from pathlib import Path; from trabe.store import Store; store=Store(Path(os.environ["DATABASE_PATH"])); data={"settings":store.settings(),"watchlist":store.watchlist()}; connection=store.connection(); db=connection.__enter__(); data["trades"]=db.execute("SELECT id,ticker,side,quantity,price,currency,trade_date,fee,created_at,voided_at,update_id FROM trades ORDER BY id").fetchall(); connection.__exit__(None,None,None); print(hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest())'
 before_restart=$(podman exec stock-agent python -c "$state_digest")
 systemctl --user restart stock-agent.service
 wait_ready

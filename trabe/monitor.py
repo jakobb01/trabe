@@ -247,9 +247,13 @@ class Monitor:
                     "SELECT key,value FROM state WHERE key IN ('pause_until','storage_paused')"
                 )
             )
-            stocks = [
+            from trabe.ledger import Ledger
+
+            watched = [
                 row[0] for row in db.execute("SELECT ticker FROM watchlist ORDER BY tier,ticker")
             ]
+            held = Ledger._held(db)
+            stocks = watched + sorted(held - set(watched))
             rules = {
                 ticker: (
                     bool(enabled),
@@ -261,6 +265,9 @@ class Monitor:
                     "SELECT ticker,enabled,threshold FROM alert_preferences"
                 )
             }
+        # Held-only symbols need prices but do not implicitly enable dip alerts.
+        for ticker in held - set(watched):
+            rules[ticker] = (False, float(settings["dip_threshold_percent"]))
         self.engine.configure(
             settings,
             rules,

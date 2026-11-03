@@ -3,7 +3,31 @@
 Use Python 3.11 or newer. Runtime and development dependencies are pinned in
 `pyproject.toml`. The one runtime dependency is the pure-Python WebSocket client.
 
-## Local checks
+## Testing policy
+
+Keep the development loop small. For an ordinary change, run the relevant unit
+test file or case and lint/format checks on changed Python files. Add a small
+regression test when it protects actual behavior, especially money arithmetic,
+owner authorization, saved state or alert deduplication. Keep existing useful
+tests; do not add tests that just mirror the implementation.
+
+Documentation-only changes need a diff/link review, not app tests or a deployment.
+Check shell/CI syntax when those files change. Once the relevant checks pass,
+reuse that result until another change or failure gives a reason to rerun it.
+
+Default GitHub Actions runs lint, formatting, shell syntax and the unit suite
+once on Python 3.13. There is no default Python matrix, integration run, container
+build, ARM emulation or storage soak.
+
+Extended checks are opt-in. Use one when explicitly requested or when a concrete
+change/failure needs it: a transport change can need the HTTP/WebSocket fixture;
+a dependency/image change can need a container check; a retention change can need
+a storage soak. State the reason, choose the relevant check and run it once.
+Do not run the entire menu for a routine feature. A deployment uses its existing
+readiness/delivery checks plus one relevant Telegram walkthrough, avoiding a
+second copy of the same local validation on the Pi.
+
+## Basic local checks
 
 ```sh
 python3 -m venv .venv
@@ -11,28 +35,40 @@ python3 -m venv .venv
 python -m pip install -e '.[dev]'
 ruff check trabe scripts tests
 ruff format --check trabe scripts tests
-python -m unittest discover -s tests -v
-python -m unittest discover -s tests -p 'integration_*.py' -v
-python -m tests.soak_intraday
+python -m unittest discover -s tests -q
 for script in scripts/*.sh deploy/*.sh; do bash -n "$script"; done
 sh -n deploy/stock-agent-quadlet-generator
 ```
 
-The unit tests simulate external services. The HTTP/WebSocket integration tests use a
-loopback fixture. Neither needs real API keys, Telegram messages or access to a Pi.
-GitHub Actions runs these checks on Python 3.11 and 3.13, plus the production
-container checks.
+For a focused intraday change, for example, use
+`python -m unittest discover -s tests -p test_intraday.py -q` instead of rerunning
+the full unit suite. Tests use fixture credentials and temporary databases.
 
-With rootless Podman installed:
+## Optional extended checks
+
+Run only what the change needs:
 
 ```sh
+python -m unittest discover -s tests -p 'integration_*.py' -v
+# Build once and check the restricted runtime; no unit/integration/soak replay.
 bash scripts/check-container.sh
+# Include the HTTP/WebSocket fixture when needed.
+CHECK_EXTENDED=1 bash scripts/check-container.sh
+# Include the storage soak only when needed.
+CHECK_SOAK=1 bash scripts/check-container.sh
 python3 scripts/check_quadlet.py
 ```
 
-The Quadlet check requires a local Quadlet generator. The container build downloads
-the pinned Python base image when it is not already available. Container tests
-then run without external networking or real credentials.
+The integration fixture uses loopback HTTP/WebSocket connections. The container
+check needs rootless Podman and downloads the pinned image/runtime dependency if
+absent; its checks run without external networking or real credentials. The
+Quadlet check needs a local generator. ARM/QEMU validation is reserved for an
+identified architecture issue or a relevant runtime/dependency change.
+
+In GitHub Actions, choose **Run workflow** and enable `extended` or `soak` only
+when needed. `extended` adds Python 3.11 unit compatibility and production-image
+HTTP/WebSocket checks. `soak` adds the longer storage run. Existing scripts and
+test coverage remain available without making them routine development gates.
 
 ## Project boundaries
 

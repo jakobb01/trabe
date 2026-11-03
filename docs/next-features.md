@@ -1,220 +1,179 @@
 # trabe feature roadmap
 
-Updated 2026-11-03: Finnhub WebSocket selected, with daily rollups and three-month
-history retention. Release 0.3 implements the commands and contracts below;
-recorded verification is in [validation](validation.md).
-The interface stays entirely in private
-Telegram messages, with outbound connections and no new inbound network ports.
+Updated 2026-11-03. Position tracking is the next priority. A daily predictor and
+advisor follows earnings, insider transactions and news briefings, and starts
+with simulated positions so its results can be measured.
 
-## Previous baseline: 0.2.2
+Everything stays in private Telegram messages. The Pi uses outbound connections
+and the existing rootless Podman deployment; no website or new inbound port.
+Commands below are proposals until their release is implemented.
 
-trabe has an owner-only bot, persistent watchlist/settings, cached end-of-day
-quotes, background daily-change scans, an optional weekday summary and a durable
-reply queue. Its rootless Podman Quadlet deployment includes backups and rollback.
-The rename preserves the deployed service/data identifiers.
+## Current release: 0.3 — deployed
 
-The latest quote cache holds one result per symbol. There is no intraday feed,
-historical observation store, alert ledger or per-stock threshold yet. The
-remaining baseline acceptance is the repeated GOOGL/VST scan after the pacing
-correction, plus reboot verification during a suitable Pi maintenance window.
+Finnhub intraday monitoring, previous-close dip alerts, per-stock rules,
+pause/resume, daily observed-price summaries and three-month price retention are
+running on the Pi. Existing watchlists and preferences survive upgrades.
+See the [0.3 release contract](release-0.3.md), [verification record](validation.md)
+and [Telegram walkthrough](try-0.3.md).
 
-## Release 0.3 — intraday monitoring and dip alerts
+## Release order
 
-Bring the provider boundary and timestamped price storage forward into **0.3**.
-Use a free US intraday feed to make alerts useful during the trading session.
-See the sourced comparison and capacity estimates in
-[market-data research](market-data-research.md).
-
-The selected provider is **Finnhub**, subject to verifying a real free key against
-GOOGL and VST. Use one shared WebSocket for continuous trades, with bounded
-REST calls for initial quotes, previous closes, session information and recovery.
-Alpaca, Tiingo and Twelve Data remain documented for future use; their adapters
-are outside 0.3. A Finnhub access failure blocks activation and reports the reason.
-
-Alpha Vantage remains an explicitly labelled end-of-day option. An intraday feed
-outage must not silently turn an old daily quote into an intraday alert input.
-
-### Telegram controls
-
-| Command | Behavior |
-| --- | --- |
-| `/provider` | Show the configured provider, feed capabilities and availability |
-| `/provider finnhub` | Select the provider only when its credentials/capabilities are verified |
-| `/monitor on`, `/monitor off` | Enable/disable automatic intraday collection and alert evaluation |
-| `/alerts` | Show thresholds, overrides, pause state and recent alerts without fetching prices |
-| `/history VST 5` | Show recent daily observed-price summaries and coverage labels |
-| `/storage` | Show DB/WAL/backup sizes, retention cutoff and maintenance state |
-| `/alert VST -5` | Override VST's percentage-drop threshold relative to its validated previous close |
-| `/alert VST default` | Restore the global threshold |
-| `/alert VST off` | Disable proactive VST alerts without removing the stock |
-| `/pause 24h`, `/resume` | Pause/resume automation while keeping manual commands available |
-
-All ordinary configuration stays in Telegram. Add provider credentials locally
-to the private bootstrap environment; never request API secrets in chat. New
-automation defaults off. A previously enabled daily summary keeps its setting,
-separate from intraday monitoring.
-
-`/status` should expose connection state, the latest source observation, market
-session, subscribed/unsupported symbols and quota/cooldown state. `/quote` and
-`/prices` must distinguish fresh intraday data, cached data and end-of-day data.
-The existing daily summary remains optional and must describe its actual inputs.
-
-### Data and alert contract
-
-* Scope the first integration to supported US-listed stocks during the normal
-  exchange session. Handle holidays, early closes and America/New_York DST;
-  the user's timezone controls message display, not exchange opening times.
-* Store provider/feed, symbol, currency, source UTC time, receipt time, session
-  date, price and previous-close provenance. Never treat receipt time as proof of
-  source freshness. Preserve last-trade versus derived-reference-price semantics.
-* Calculate `(current_price / previous_close - 1) * 100` only when price and
-  baseline are compatible and validated. Do not reuse Alpha Vantage's cached
-  percentage with another feed's price. Missing or suspect baselines disable that
-  rule; corporate actions must not manufacture a large price-drop alert.
-* Maintain a bounded ingestion queue and latest-price cache. Evaluate eligible
-  incoming observations promptly; persist minute observations/summaries rather
-  than every tick. Retain minute detail only for an unfinished session; finalize
-  it into daily summaries after the close, then remove the minute rows. Any
-  observed high/low is specific to the received feed and cannot be presented as
-  complete full-market OHLCV.
-* Preserve a breach detected within a minute even if the price recovers before
-  the minute sample is written. Backpressure/reconnect gaps must be visible;
-  resuming a connection does not prove every intermediate trade was observed.
-* Trigger at most one proactive event per symbol/rule/exchange session in 0.3.
-  Keep repeated flags visible in manual scans without repeatedly notifying the
-  owner. Multiple threshold levels and rearming after recovery can come later.
-* Reject invalid, future, duplicate, out-of-order, stale and out-of-session data
-  for alerts. Start with a documented 120-second maximum source age during the
-  core session, configurable through Telegram; validate this default against the
-  chosen feed. A quiet symbol may become unavailable for alerts instead of being
-  described as current. A fresh stream heartbeat does not make every symbol fresh.
-
-### Storage decision
-
-Keep approximately 3,900 minute buckets/day for a stable 10-stock watchlist while
-the session is open. At the actual close plus ten minutes, atomically roll up to
-one daily row per stock/feed and delete that session's minute detail. Keep the
-daily rows for three calendar months, then expire them.
-
-The [storage plan](storage-and-retention.md) defines the daily fields, exact cutoff,
-crash recovery, bounded backups and measured disk usage. A synthetic SQLite
-measurement used about 0.44 MiB for 10 stocks' active minute data plus retained
-daily history; the packed archive alone was about 0.10 MiB. WAL and backup files
-raise the measured peak to about 6.23 MiB. Reserve 32 MiB for a typical 10-stock
-workload and 64 MiB for 50 stocks, subject to verification on the actual Pi.
-
-These are planning allowances, not hard WAL limits. Historical intraday charts
-will not be available after daily rollup. `/history` presents the retained daily
-summaries with provider and coverage metadata.
-
-### Implementation slices
-
-1. **Prove free-account access.** With a key entered locally, validate GOOGL/VST
-   REST fields, baseline, timestamps and streaming subscriptions while the market
-   is open. Confirm subscription limits, session/status endpoints and actual feed
-   characteristics. Check the closed-market case too. If an account lacks access,
-   report it clearly before enabling monitoring; do not subscribe to a paid plan.
-2. **Provider/configuration boundary.** Separate Telegram delivery from market
-   adapters. Add normalized observation/capability contracts and provider-specific
-   credentials, request accounting and cache namespaces. Keep the Alpha Vantage
-   budget intact; its 20/day default and 25/day setting cap cannot be reused for
-   Finnhub. Update private credential serialization and the deployment bundle so
-   the new key survives deployment without appearing in logs or image layers.
-3. **Session-aware ingestion.** Add one outbound WebSocket worker, subscription
-   reconciliation after watchlist changes, bounded queues and reconnect/backoff.
-   Use REST sparingly for bootstrap/recovery and an explicitly validated calendar
-   for session gating. Do not silently ignore symbols above the free plan's
-   subscription limit. Keep `/status` responsive while the stream reconnects.
-4. **Observation storage and migration.** Add numeric minute buckets, daily
-   summaries, normalized instrument/feed metadata, effective alert settings and
-   a persistent pause timestamp. Batch closed-minute writes in one transaction
-   per minute. Preserve watchlist, preferences, existing API usage, scan history
-   and pending replies. Recover unfinished buckets before the next session.
-5. **Rollup, retention and storage reporting.** Implement an idempotent daily
-   rollup/delete transaction, close-time grace period, three-calendar-month expiry
-   and startup catch-up. Run maintenance even while monitoring is off/paused.
-   Reuse freed SQLite pages, checkpoint the WAL when quiet and report busy-reader
-   failures. Add a shared backup-protection lock/marker and prune automatic
-   snapshots to three retained plus one in progress, with the same age limit.
-   Implement `/history` and `/storage`, disk-reserve monitoring and a safe pause
-   when continued growth or low space threatens persistence.
-6. **Transactional alerts.** Evaluate the previous-close rule using a pure rule
-   module. Claim a unique symbol/rule/session event and enqueue its message in
-   one SQLite transaction. Save the price, timestamp, feed, baseline and threshold
-   used; persist the triggering bucket with the event when needed to retain a
-   brief breach through a crash. Threshold edits, provider changes and remove/re-add operations must not
-   resend an existing session event. Changing providers invalidates cached
-   baselines and requires a fresh compatible observation before evaluation.
-7. **Telegram controls and delivery.** Implement the proposed commands, menu and
-   status. Recheck pause before automatic provider work and inside the enqueue
-   transaction. Tag proactive outbox messages so pause suppresses them without
-   blocking control replies. Resume the current session without a historical alert
-   backlog. Bound delivery latency independently of market-data ingestion and
-   respect Telegram pacing.
-8. **Release on the Pi.** Test upgrade/rollback using a populated previous
-   database. Verify the WebSocket dependency installs and runs on ARMv7 in the
-   production image. Deploy through the existing script, retaining readiness,
-   restart-persistence, credential isolation and no-published-port checks.
-
-A free feed can be useful without representing every US venue. Messages should
-name the feed and source time. This release monitors the data actually received;
-it does not promise to catch every market tick or match a consolidated broker
-screen exactly. The existing Telegram lost-response retry limitation also remains.
-
-### Acceptance criteria
-
-* A real free account supplies usable GOOGL/VST updates during an open session.
-  Timestamp age, baseline and feed entitlement are recorded in the acceptance log.
-* An eligible breach creates one event and one queued notification. A brief breach
-  followed by recovery within a sampling minute is still retained and alerted.
-* Duplicate ticks, repeated scans, restarts, threshold/provider edits and
-  remove/re-add operations do not duplicate the session event.
-* Concurrency and crash tests leave both the alert ledger entry and outbox record,
-  or neither. Delivery retries make no extra market-data request.
-* Stale source timestamps, malformed frames, future clocks, unavailable baselines,
-  split-related inconsistencies and mixed-feed inputs produce no fresh alert.
-* Reconnect/backoff works without multiple simultaneous sockets for the same key.
-  Subscription denial and rate limiting remain distinguishable from invalid symbols.
-* Exchange holidays, early closes, DST mismatches, process downtime and expired
-  calendars do not cause an unbounded polling loop or off-session alerts.
-* Provider quotas are independent and persisted appropriately. Cache reads and
-  local history/status commands consume no provider requests.
-* Pause survives restarts, suppresses proactive delivery and stops the next
-  automatic request/subscription work. Manual commands remain usable.
-* Daily rollup preserves observed extrema, baseline and partial-session metadata,
-  then removes minute detail atomically. Repeating it cannot erase a summary.
-* Three-month expiry is correct at month ends/leap years, after downtime and after
-  backup restoration. Monitoring pause/off does not stop maintenance.
-* A multi-session soak test demonstrates page reuse and bounded database/WAL
-  growth. Backup pruning respects active rollback, count and age limits.
-* Retention, queue bounds and reconnect load fit the existing Pi resource limits.
-  `/storage` reports failures and low-space collection pauses without consuming
-  market API requests. Upgrade/rollback preserves data and opens no listening port.
-
-### Where the work belongs
-
-| Component | Change |
-| --- | --- |
-| `trabe/providers/` (new) | Normalized contracts, Finnhub and existing Alpha Vantage adapter |
-| `trabe/monitor.py` (new) | Session-aware stream lifecycle, watchlist subscriptions and bounded ingestion |
-| `trabe/alerts.py` (new) | Pure threshold evaluation and event decisions |
-| `trabe/store.py` | Migration, numeric minute/daily tables, provider usage and unique alert events |
-| `trabe/maintenance.py` (new) | Transactional daily rollup, expiry, checkpointing, storage metrics and catch-up |
-| `trabe/outbox.py`, `runtime.py` | Transactional enqueue, proactive-message tags and responsive delivery |
-| `trabe/bot.py`, `preferences.py`, `scans.py` | Telegram controls, capability-aware quotes/scans and pause |
-| `trabe/config.py`, `setup.py`, deployment scripts | Private key setup, active-provider checks and protected/bounded backups |
-| `tests/` | HTTP/WebSocket fixtures, rule/transaction tests, session cases and populated-database upgrade |
-
-## Later milestones
-
-| Order | Milestone | Prerequisite and completion target |
+| Release | Priority | Useful outcome |
 | --- | --- | --- |
-| 0.4 | History analysis and richer rules | Build on retained daily summaries. Add clearly defined weekly comparisons, threshold ladders/rearming and optional history backfill after confirming data entitlements and corporate-action treatment. |
-| 0.5 | Earnings watchdog | Validate a calendar source against the watchlist. Store source/update times and certainty; send configurable 3–5 day warnings and handle date changes without spam. |
-| 0.6 | Insider buys | Choose a reliable structured source. Distinguish open-market buys from grants/exercises; filter by role/value and retain source links and filing dates. |
-| 0.7 | News and morning briefing | Validate feeds, deduplicate links and add a digest time. Introduce optional AI summaries after collection works, with sources and labelled model assessments. |
+| **0.4 — next** | Positions and progress | Record purchases and sales; see position value and profit/loss using the current feed; receive progress messages. |
+| 0.5 | Earnings watchdog | Know which held or watched companies report soon and receive a configurable warning. |
+| 0.6 | Insider buys | See meaningful executive/director open-market purchases with source links and filing dates. |
+| 0.7 | News and morning briefing | Receive a concise digest connecting news, earnings, insider activity and holdings. |
+| 0.8 | Daily predictor/advisor with paper trading | Generate timestamped forecasts and suggestions; measure them using simulated positions before considering any use with real holdings. |
 
-For each new source, verify coverage, freshness, fields, usage limits and account
-entitlements. Paid access requires a user-selected scope and cost. Python remains
-appropriate; introduce explicit dependencies only where needed. Trading and
-brokerage execution stay outside this plan.
+Ship these as small usable additions. Each release reuses the current prices,
+Telegram controls, durable delivery and storage rather than starting another app.
+
+## 0.4 — positions, purchase prices and progress
+
+The 0.4 implementation adds EUR/USD reporting and historical FX. Its commands and
+operational limits are documented in [the 0.4 release notes](release-0.4.md).
+The following section retains the original planning context; deployed 0.3 remains
+the live release until the owner performs the 0.4 rollout.
+
+Record what was bought, how much, at what price and when. Start with long
+positions in supported US-listed USD stocks, including fractional quantities.
+These commands record transactions entered by the owner; they do not place
+brokerage orders.
+
+### Proposed Telegram commands
+
+| Command | Purpose |
+| --- | --- |
+| `/buy VST 10 140.50` | Record a purchase of 10 shares at USD 140.50; default date is today. |
+| `/buy VST 5 138.00 2026-11-03` | Record another purchase, optionally with an explicit date. |
+| `/sell VST 4 150.00` | Record a full or partial sale and its realized result. |
+| `/portfolio` | Show holdings, invested cost, observed market value and unrealized profit/loss. |
+| `/position VST` | Show quantity, average entry, source price/time, cost basis and position return. |
+| `/trades VST` | List recorded transactions with IDs so mistakes can be corrected. |
+| `/trade_void ID` | Void a mistaken record and recalculate the position, retaining the correction history. |
+| `/portfolio_summary 23:00` or `/portfolio_summary off` | Configure an optional daily progress message in the owner's timezone. |
+
+### First implementation
+
+1. **Transaction ledger.** Persist purchases, sales, quantity, execution price,
+   currency, date and optional fees. Support repeated purchases, partial sales and
+   corrections. Reject overselling and invalid quantities/prices. Use decimal
+   arithmetic for money and quantities; weighted-average cost is the initial
+   reporting convention, with rounding only for display.
+2. **Position valuation.** Reuse compatible Finnhub observations for the ticker.
+   Show quantity, average entry, remaining cost basis, market value, unrealized
+   profit/loss in USD and percent, and realized profit/loss for recorded sales.
+   For an open position, `value = quantity × price`, `unrealized P/L = value −
+   remaining cost basis`, and `return = unrealized P/L / remaining cost basis ×
+   100`. Recorded fees feed into the cost/proceeds calculations. Totals initially
+   describe recorded holdings in USD, not a complete brokerage account balance.
+3. **Telegram progress.** Provide an on-demand portfolio report and an opt-in
+   daily summary: invested cost, current value, gains/losses, largest contributors
+   and changes since the previous comparable snapshot. Distinguish market moves
+   from purchases/sales; deposits or a new purchase must not look like profit.
+   Reuse cached prices instead of fetching once per message. Pause suppresses
+   automatic progress messages while manual reports remain available.
+4. **Price and ownership correctness.** Display source time and fresh/stale/closed
+   status. Report missing valuations explicitly and label partial totals. A
+   watchlist removal never deletes an owned position or stops its required price
+   coverage. Use the union of watched and held symbols for subscription limits;
+   report the free-plan capacity before silently losing coverage. Changes to
+   quantities or cost basis from splits require an explicit adjustment when the
+   feed cannot verify them.
+5. **Durable foundation.** Keep transaction records and open-position cost basis
+   independently of three-month market-price expiry. Retain compact daily
+   portfolio snapshots for three calendar months initially. Preserve the ledger
+   through restarts, upgrades and backup restores; provide explicit correction
+   or deletion controls. These records become inputs to later exposure/risk
+   analysis and the advisor.
+
+Keep the existing previous-close dip rule separate from a position's gain/loss
+relative to purchase cost. Entry-price alerts and richer risk rules can follow
+the initial portfolio release rather than delaying it.
+
+Done means a recorded purchase is valued against the feed, a second purchase and
+partial sale calculate correctly, stale/missing prices are labelled, and the
+owner can receive one scheduled progress message with settings preserved after a
+service restart. Keep a few focused arithmetic/ledger tests and one Telegram
+walkthrough for this feature.
+
+## 0.5 — earnings watchdog
+
+Find upcoming reports for held and watched companies. Verify source access and
+date certainty, retain when the information was checked, and send configurable
+warnings such as 3–5 days before earnings. Handle date changes and deduplicate
+warnings. Include position exposure where holdings exist. Source/plan limitations
+must be visible before enabling the feature.
+
+## 0.6 — insider purchases
+
+Track structured filings or a verified feed for meaningful CEO/CFO/director
+open-market purchases. Distinguish purchases from grants, exercises and other
+transaction types. Save transaction date, filing/publication date, role, size and
+source link, and deduplicate amended or repeated records. Connect alerts to held
+and watched stocks. Later prediction inputs use the time the filing was actually
+available, not an earlier transaction date.
+
+## 0.7 — news and morning briefing
+
+Collect and deduplicate news for held/watched stocks. Produce concise summaries
+with source links, publication/receipt times and clearly labelled sentiment.
+The optional morning briefing combines news, earnings, insider activity,
+positions and recent market observations. Retain compact structured signals that
+the predictor can consume. Model/provider selection and any API spending cap are
+explicit configuration decisions; the briefing should still work without paid
+AI summarization.
+
+## 0.8 — daily predictor/advisor, evaluated with simulated positions
+
+Once positions, earnings, insider purchases and news are available, run one
+scheduled daily evaluation using their combined state. Start with a paper
+portfolio and measure the outcome; recommendations remain messages for review.
+
+1. **Freeze the daily inputs.** Store an as-of timestamp and compact snapshot of
+   available news/sentiment, upcoming earnings, published insider activity,
+   price history, positions, exposure and data-quality gaps. Preserve enough
+   provenance to explain a decision later, even after ordinary market-history
+   expiry. Define a bounded retention/export policy for experiment records.
+2. **Record a forecast before its outcome.** Select a fixed forecast horizon
+   before the experiment, such as the next five trading sessions. Produce a
+   direction/range, confidence estimate, reasoning with sources, risk flags and a
+   proposed hold/add/reduce/avoid action. Save the model/version, inputs and
+   configuration. Missing or stale inputs can produce an explicit abstention;
+   confidence is measured against outcomes before being treated as reliable.
+3. **Paper portfolio.** Keep simulated cash, positions and trades separate from
+   the owner's actual transaction ledger. Configure starting cash, allocation
+   limits, fees and slippage through Telegram. Apply fills at a qualifying price
+   observed after the decision, with fixed execution rules and exchange-session
+   handling. Never use future news or a price from before the forecast to grant
+   the simulator an impossible fill.
+4. **Evaluate daily.** Compare net returns, drawdown, exposure, turnover and costs
+   with fixed buy-and-hold/cash benchmarks under comparable assumptions. Track
+   forecast accuracy at the declared horizon, abstentions, missing data and
+   confidence calibration where there are enough observations. Send a concise
+   progress message linking the forecast, simulated action and measured outcome.
+5. **Make experiments comparable.** Version the strategy and keep predictions
+   and outcomes unchanged after the fact. Keep a distinct forward paper run when
+   tuning a strategy on historical data. Report the sample size and evaluation
+   period; a short profitable run alone does not establish predictive skill.
+
+Paper trading is the first delivery target. Any later use as an advisor for real
+holdings is a separate milestone after reviewing forward results. Automated
+brokerage execution is outside this roadmap.
+
+## Additional backlog
+
+Weekly/history comparisons, threshold ladders, recovery/rearming rules,
+entry-price alerts, dividends/FX and richer position risk analysis remain useful
+follow-ups. They should support the release order above without blocking the
+first usable position tracker. Alpaca, Tiingo and Twelve Data remain documented
+in [provider research](market-data-research.md) for future use.
+
+## Small development loop
+
+Use focused unit tests for the behavior being changed and one relevant Telegram
+check when a feature reaches the Pi. Documentation changes need no app test run
+or deployment. Default CI runs basic checks once on one Python version. Extended
+integration/container checks and storage soaks are manual options, not routine
+gates. See [CONTRIBUTING.md](../CONTRIBUTING.md#testing-policy) for the policy.

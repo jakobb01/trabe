@@ -1,6 +1,14 @@
 # Validation
 
-## Reproduce the checks
+## Current testing policy
+
+Routine development now uses focused unit tests and relevant lint/syntax checks.
+Default CI runs the unit suite once on Python 3.13. HTTP/WebSocket integration,
+container checks, Python 3.11 compatibility and storage soaks are manual options.
+See [CONTRIBUTING.md](../CONTRIBUTING.md#testing-policy). The extensive 0.3 results
+below are historical release evidence, not a checklist to repeat per feature.
+
+## Reproduce optional checks
 
 Install development dependencies and run the commands in
 [CONTRIBUTING.md](../CONTRIBUTING.md). Unit and HTTP integration tests need no real
@@ -8,9 +16,35 @@ credentials. HTTP/WebSocket fixtures enforce provider pacing and exercise real u
 requests over loopback, Telegram authorization, commands, background scans,
 cached quotes, settings and durable state through a process restart.
 
-The container script runs the suites in the production image with no external
-networking, a read-only root filesystem, no capabilities and a 256 MB memory limit.
+The container script checks the restricted runtime by default. Enable
+`CHECK_EXTENDED=1` for the integration fixture or `CHECK_SOAK=1` for the storage
+soak. These run in the production image with no external networking, a read-only
+root filesystem, no capabilities and a 256 MB memory limit.
 For isolated Podman storage, set `CHECK_RUNTIME_ROOT=/tmp/trabe-check`.
+
+## Position release: 0.4 review (2026-11-03)
+
+Reviewed the implementation against `todo04.md`: EUR/USD defaults and explicit
+trade currencies, decimal weighted-average cost, partial sales and corrections,
+historical FX provenance, converted valuations, held-symbol coverage, daily
+progress and ledger-preserving retention are implemented.
+
+The focused checks passed: 2 ledger tests, 14 portfolio/FX tests and 31 core bot
+tests (47 total). Ruff lint/format checks passed for the changed Python files;
+the changed installer passed shell syntax and whitespace checks. The live
+[Frankfurter v1 endpoint](https://frankfurter.dev/v1/) returned a usable EUR/USD
+reference rate and the prior Friday's rate for a Saturday historical request.
+No broad integration, container or ARM
+soak was repeated for this review.
+
+Review fixes prevent failed old FX dates from starving later backfills and
+recheck pause before the next FX request in a batch. Portfolio and Currency
+buttons were added to the persistent Telegram keyboard.
+
+The owner rebooted the Pi after an initial SSH connection refusal. Its 0.3 service
+returned with the existing settings and watchlist intact. The 0.4 deployment is
+in progress through the usual script; the owner walkthrough is documented in
+[the release notes](release-0.4.md).
 
 ## Intraday release: 0.3 (2026-11-03)
 

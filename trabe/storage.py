@@ -4,6 +4,19 @@ import json
 import time
 
 SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+        side TEXT NOT NULL, quantity TEXT NOT NULL, price TEXT NOT NULL,
+        currency TEXT NOT NULL, trade_date TEXT NOT NULL, fee TEXT NOT NULL,
+        fx_rate TEXT, fx_date TEXT, fx_provider TEXT, fx_retrieved TEXT, fx_from TEXT, fx_to TEXT,
+        created_at TEXT NOT NULL, voided_at TEXT, update_id INTEGER UNIQUE)""",
+    """CREATE TABLE IF NOT EXISTS fx_cache (
+        requested_date TEXT PRIMARY KEY, usd_per_eur TEXT NOT NULL,
+        effective_date TEXT NOT NULL, provider TEXT NOT NULL, retrieved_at REAL NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS fx_attempts (
+        requested_date TEXT PRIMARY KEY, attempted_at REAL NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+        day TEXT PRIMARY KEY, currency TEXT NOT NULL, payload TEXT NOT NULL)""",
     "CREATE TABLE IF NOT EXISTS provider_usage(provider TEXT,day TEXT,requests INTEGER NOT NULL,PRIMARY KEY(provider,day))",
     "CREATE TABLE IF NOT EXISTS provider_calls(provider TEXT,requested_at REAL NOT NULL)",
     "CREATE INDEX IF NOT EXISTS calls_by_provider_time ON provider_calls(provider,requested_at)",

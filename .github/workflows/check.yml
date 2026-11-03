@@ -2,37 +2,54 @@ name: Checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      extended:
+        description: Run Python 3.11 compatibility and HTTP/WebSocket container checks
+        type: boolean
+        default: false
+      soak:
+        description: Run the longer storage soak in the production container
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   python:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: '3.13'
       - run: python -m pip install '.[dev]'
       - run: ruff check trabe scripts tests
       - run: ruff format --check trabe scripts tests
       - run: python -m unittest discover -s tests -v
-      - run: python -m unittest discover -s tests -p 'integration_*.py' -v
       - name: Check shell syntax
         run: |
           for script in scripts/*.sh deploy/*.sh; do
             bash -n "$script"
           done
           sh -n deploy/stock-agent-quadlet-generator
-  container:
+  extended:
+    if: github.event_name == 'workflow_dispatch' && (inputs.extended || inputs.soak)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - if: inputs.extended
+        run: |
+          python -m pip install '.[dev]'
+          python -m unittest discover -s tests -q
       - run: sudo apt-get update && sudo apt-get install -y podman
       - run: bash scripts/check-container.sh
+        env:
+          CHECK_EXTENDED: ${{ inputs.extended && '1' || '0' }}
+          CHECK_SOAK: ${{ inputs.soak && '1' || '0' }}

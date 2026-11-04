@@ -5,10 +5,11 @@ It runs on a Debian/Raspbian Raspberry Pi with Podman Quadlet and SQLite. It nee
 outbound HTTPS/WebSocket connections and your existing SSH connection;
 **no website or new inbound port**.
 
-Version 0.4 adds a durable transaction ledger, EUR/USD portfolio valuation and
-optional daily progress messages. Finnhub monitoring, dip alerts, pause/resume,
-watchlists and preferences remain available. The service records trades you have
-already made; it never places orders.
+Version 0.7 is ready for deployment: earnings warnings, verified insider-purchase
+reports, company-news extracts and an optional morning briefing. The existing
+0.4 ledger, EUR/USD portfolio valuation, daily progress and Finnhub dip monitoring
+remain available. New automation defaults off. The service records trades you
+have already made; it never places orders. See the [0.7 release notes](docs/release-0.7.md).
 
 The [feature roadmap](docs/next-features.md) defines the next releases. The
 [storage plan](docs/storage-and-retention.md) keeps minute detail during the session,
@@ -48,7 +49,8 @@ one small root-owned launcher installed with `sudo`; no OS upgrade is performed.
 Send `/menu` for persistent buttons. Only the paired user in their private chat can
 read or change the app's configuration.
 
-See the [0.4 release notes](docs/release-0.4.md) for portfolio setup and the post-deployment walkthrough.
+See the [0.7 walkthrough](docs/release-0.7.md#one-walkthrough-after-deployment)
+for the new features and [0.4 notes](docs/release-0.4.md) for portfolio setup.
 
 | Command | Effect |
 | --- | --- |
@@ -59,6 +61,10 @@ See the [0.4 release notes](docs/release-0.4.md) for portfolio setup and the pos
 | `/trades GOOGL`, `/trade_void ID` | List transactions and void an incorrect entry |
 | `/position_adjust GOOGL 10`, `/basis_adjust GOOGL 500 EUR` | Record explicit quantity or remaining-basis corrections |
 | `/portfolio_summary 23:00`, `/portfolio_summary off` | Enable/disable daily portfolio progress |
+| `/earnings [VST\|on\|off\|refresh]` | Cached schedules, upcoming warnings and date corrections |
+| `/insiders [VST\|on\|off\|refresh]` | Qualified purchase reports, source links and alerts |
+| `/news [VST\|on\|off\|refresh]` | Source-linked extracts and labelled heuristic sentiment |
+| `/briefing [now\|08:00\|on\|off]` | Manual digest or optional scheduled morning briefing |
 | `/status` | Service health, watchlist size, scan state and request budget |
 | `/test` | Confirm message delivery |
 | `/watchlist` | List symbols and tiers |
@@ -87,6 +93,10 @@ saved organizational label; it does not change alert severity in this release.
 | --- | --- | --- |
 | `default_currency` | `EUR` | `EUR` or `USD` |
 | `portfolio_summary_time` | `off` | `HH:MM` or `off` |
+| `earnings_enabled`, `insiders_enabled`, `news_enabled`, `briefing_enabled` | `off` | `on` or `off` |
+| `briefing_time` | `08:00` | `HH:MM` in the saved timezone; enabling is separate with `/set` |
+| `earnings_warning_days` | `5` | 1–14 calendar days |
+| `insider_min_value_usd` | `10000` | 1000–1000000000 USD |
 | `timezone` | `Europe/Ljubljana` | IANA timezone, e.g. `America/New_York` |
 | `quote_cache_minutes` | `60` | 1–1440 |
 | `api_daily_budget` | `20` | 1–25 |
@@ -185,8 +195,11 @@ interrupted scheduled check is not automatically repeated that day; use `/scan`.
 Scans flag daily changes at or below the configured dip threshold. They reuse
 cached data, prioritize uncached/older symbols, stop at the request budget or a
 provider outage, and report partial results clearly. There is one scan worker;
-`/status` remains available while it works. Weekly comparisons, earnings, insider
-analysis and AI summaries remain future work.
+`/status` remains available while it works. Earnings, insider purchases and news
+use a separate bounded background worker, existing request budgets and cached
+views. Briefings can refresh all sections while standalone automation is off.
+News summaries are extractive and sentiment is heuristic; model-based summaries,
+weekly comparisons and the paper-trading advisor remain future work.
 
 ## Development
 

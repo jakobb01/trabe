@@ -70,7 +70,7 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
     outbox = Outbox(store)
     market = market or MarketRouter(config, store)
     services = Services(store, config, market, outbox, telegram)
-    bot = Bot(config, store, outbox, market, monitor=services.monitor)
+    bot = Bot(config, store, outbox, market, monitor=services.monitor, insights=services.insights)
     stop = stop_event if stop_event is not None else threading.Event()
     old_handlers = {}
     if threading.current_thread() is threading.main_thread():

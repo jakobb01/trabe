@@ -184,6 +184,46 @@ class Maintenance:
             db.execute("DELETE FROM scan_jobs WHERE status!='running' AND created_at<?", (end,))
             db.execute("DELETE FROM outbox WHERE created_at<?", (now - 86400,))
             db.execute("DELETE FROM provider_calls WHERE requested_at<?", (now - 60,))
+            db.execute(
+                "DELETE FROM signals WHERE kind IN ('news','news_daily','insiders','briefing') AND event_time<?",
+                (end,),
+            )
+            db.execute(
+                "DELETE FROM signals WHERE kind NOT IN ('news','news_daily','insiders','briefing') AND last_seen<? AND event_time<?",
+                (end, end),
+            )
+            db.execute("DELETE FROM signal_notifications WHERE created_at<?", (end,))
+            db.execute("DELETE FROM signal_sources WHERE attempted_at<?", (end,))
+            db.execute(
+                "DELETE FROM state WHERE key LIKE 'news_health_%' AND json_extract(value,'$.checked_at')<?",
+                (end,),
+            )
+            db.execute(
+                "DELETE FROM state WHERE key LIKE 'earnings_status_%' AND substr(key,17) NOT IN (SELECT symbol FROM signal_sources WHERE kind='earnings')"
+            )
+            db.execute(
+                "DELETE FROM state WHERE key LIKE 'insiders_warning_%' AND substr(key,18) NOT IN (SELECT symbol FROM signal_sources WHERE kind='insiders')"
+            )
+            db.execute(
+                "DELETE FROM signal_jobs WHERE status!='pending' AND created_at<?", (now - 86400,)
+            )
+            db.execute("DELETE FROM signal_http_calls WHERE requested_at<?", (now - 3600,))
+            db.execute("DELETE FROM signal_http_cache WHERE fetched_at<?", (now - 7 * 86400,))
+            db.execute(
+                "DELETE FROM state WHERE key LIKE 'briefing_wait_%' AND substr(key,15)<=?",
+                (str(cutoff),),
+            )
+            for kind, cap in (
+                ("news", 1000),
+                ("news_daily", 4500),
+                ("insiders", 5000),
+                ("earnings", 2000),
+                ("briefing", 100),
+            ):
+                db.execute(
+                    "DELETE FROM signals WHERE kind=? AND rowid NOT IN (SELECT rowid FROM signals WHERE kind=? ORDER BY event_time DESC,last_seen DESC LIMIT ?)",
+                    (kind, kind, cap),
+                )
             db.execute("DELETE FROM live_quotes WHERE received_at<?", (end,))
             db.execute(
                 "DELETE FROM state WHERE key LIKE 'finnhub_profile_%' "

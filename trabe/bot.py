@@ -10,6 +10,7 @@ from trabe import __version__
 from trabe.api import ApiError, MarketData, Telegram
 from trabe.config import Config
 from trabe.controls import Controls, intraday_text
+from trabe.insights import Insights
 from trabe.ledger import Ledger
 from trabe.portfolio import Portfolio
 from trabe.preferences import DESCRIPTIONS
@@ -19,6 +20,10 @@ from trabe.store import Store
 logger = logging.getLogger(__name__)
 
 COMMANDS = [
+    ("earnings", "Upcoming reports and earnings warnings"),
+    ("insiders", "Qualifying insider purchases and filing sources"),
+    ("news", "Cached company news and labelled sentiment"),
+    ("briefing", "Daily digest: now, HH:MM, on or off"),
     ("menu", "Open the control menu"),
     ("help", "Show available commands"),
     ("status", "Service health and API budget"),
@@ -59,6 +64,8 @@ MENU = {
         ["Cached prices", "Scan watchlist"],
         ["Settings", "Help"],
         ["Portfolio", "Currency"],
+        ["Earnings", "Insiders"],
+        ["News", "Briefing"],
         ["Monitor on", "Monitor off"],
         ["Alerts", "Storage"],
         ["Pause 24h", "Resume"],
@@ -76,6 +83,10 @@ BUTTONS = {
     "Help": "/help",
     "Portfolio": "/portfolio",
     "Currency": "/currency",
+    "Earnings": "/earnings",
+    "Insiders": "/insiders",
+    "News": "/news",
+    "Briefing": "/briefing",
     "Monitor on": "/monitor on",
     "Monitor off": "/monitor off",
     "Alerts": "/alerts",
@@ -85,6 +96,12 @@ BUTTONS = {
 }
 
 HELP = """trabe
+/earnings [TICKER|on|off|refresh] — upcoming reports and warnings
+/insiders [TICKER|on|off|refresh] — qualified purchases and filing links
+/news [TICKER|on|off|refresh] — summaries, source links and local sentiment
+/briefing now|HH:MM|on|off — combined trading-day digest
+/set earnings_warning_days 5
+/set insider_min_value_usd 10000
 /menu — show the control buttons
 /status — service health (uses no market API requests)
 /test — confirm Telegram delivery
@@ -121,7 +138,7 @@ HELP = """trabe
 /set dip_threshold_percent -4
 
 Settings and watchlist survive restarts. Symbol syntax is checked on /add; availability is checked on /quote.
-Prices show their source and source timestamp. Alpha Vantage is end-of-day; Finnhub supplies the intraday feed. Monitoring starts off until enabled. Earnings, insider tracking and AI briefings will follow later."""
+Prices show their source and source timestamp. Alpha Vantage is end-of-day; Finnhub supplies the intraday feed. New automation starts off. News summaries are extractive; sentiment is a labelled local heuristic. The daily predictor is a later release."""
 
 
 def symbol(value: str) -> str:
@@ -145,7 +162,14 @@ def trade_date(value, timezone):
 
 class Bot:
     def __init__(
-        self, config: Config, store: Store, telegram: Telegram, market: MarketData, *, monitor=None
+        self,
+        config: Config,
+        store: Store,
+        telegram: Telegram,
+        market: MarketData,
+        *,
+        monitor=None,
+        insights=None,
     ):
         self.config, self.store, self.telegram, self.market = config, store, telegram, market
         self.started = time.monotonic()
@@ -155,6 +179,7 @@ class Bot:
         self.update_id = None
         self.scans = Scans(store, market)
         self.controls = Controls(config, store, market, monitor)
+        self.insights = insights or Insights(config, store, telegram, monitor)
 
     def handle(self, update: dict):
         message = update.get("message", {})
@@ -192,6 +217,9 @@ class Bot:
             self.telegram.send(self.config.owner_id, reply)
 
     def command(self, command: str, args: list[str]) -> str:
+        signal_reply = self.insights.handle(command, args)
+        if signal_reply is not None:
+            return self.insights.bounded(signal_reply)
         extra = self.controls.handle(command, args)
         if extra is not None:
             return extra
@@ -215,6 +243,8 @@ class Bot:
                 f"Latest scan: {scan_status}\n"
                 f"Weekday summary: {settings['daily_scan_time']} ({settings['timezone']})\n"
                 + self.controls.status()
+                + "\n"
+                + self.insights.status()
             )
         if command == "watchlist":
             stocks = self.store.watchlist()
@@ -457,6 +487,12 @@ class Bot:
             if len(args) != 2:
                 raise ValueError("Usage: /set NAME VALUE. Use /settings to see available names.")
             key, value = args
+            if key in ("earnings_enabled", "insiders_enabled", "news_enabled", "briefing_enabled"):
+                return self.insights.handle(key.removesuffix("_enabled"), [value])
+            if key == "briefing_time":
+                self.store.set_setting(key, value)
+                self.insights.wake.set()
+                return f"Briefing time saved: {self.store.settings()[key]}. Use /briefing on to enable it."
             if key in ("market_provider", "monitoring"):
                 return self.controls.handle(
                     "provider" if key == "market_provider" else "monitor", [value]

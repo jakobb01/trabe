@@ -137,7 +137,12 @@ class MarketStorage:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT OR REPLACE INTO state VALUES ('pause_until',?)", (str(until),))
-            db.execute("DELETE FROM outbox WHERE kind IN ('alert','summary','notice')")
+            if not until:
+                db.execute(
+                    "INSERT OR REPLACE INTO state VALUES ('insights_resumed_at',?)",
+                    (str(time.time()),),
+                )
+            db.execute("DELETE FROM outbox WHERE kind!='reply'")
 
     def alert_rule(self, ticker: str) -> tuple[bool, float]:
         with self.connection() as db:

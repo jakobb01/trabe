@@ -1,134 +1,95 @@
 # trabe feature roadmap
 
-Updated 2026-11-03. Position tracking is the next priority. A daily predictor and
-advisor follows earnings, insider transactions and news briefings, and starts
-with simulated positions so its results can be measured.
+Updated 2026-11-04. The Pi is deployed on 0.4.0. Milestones 0.5–0.7 are
+implemented together as a **0.7.0 candidate ready to deploy**, with research and
+local verification complete. Deployment and its Telegram walkthrough are the
+next operational step; no 0.7 deployment is claimed here.
 
 Everything stays in private Telegram messages. The Pi uses outbound connections
 and the existing rootless Podman deployment; no website or new inbound port.
-Commands below are proposals until their release is implemented.
+The next feature milestone is the advisor evaluated with simulated positions.
 
-## Current release: 0.3 — deployed
+## Release order and status
 
-Finnhub intraday monitoring, previous-close dip alerts, per-stock rules,
-pause/resume, daily observed-price summaries and three-month price retention are
-running on the Pi. Existing watchlists and preferences survive upgrades.
-See the [0.3 release contract](release-0.3.md), [verification record](validation.md)
-and [Telegram walkthrough](try-0.3.md).
-
-## Release order
-
-| Release | Priority | Useful outcome |
+| Release | Status | Useful outcome |
 | --- | --- | --- |
-| **0.4 — next** | Positions and progress | Record purchases and sales; see position value and profit/loss using the current feed; receive progress messages. |
-| 0.5 | Earnings watchdog | Know which held or watched companies report soon and receive a configurable warning. |
-| 0.6 | Insider buys | See meaningful executive/director open-market purchases with source links and filing dates. |
-| 0.7 | News and morning briefing | Receive a concise digest connecting news, earnings, insider activity and holdings. |
-| 0.8 | Daily predictor/advisor with paper trading | Generate timestamped forecasts and suggestions; measure them using simulated positions before considering any use with real holdings. |
+| 0.3 | Deployed, retained in later releases | Finnhub intraday monitoring, dip alerts, pause/resume and compact three-month price history. |
+| 0.4 | Deployed | Record purchases/sales in EUR or USD; see converted position value and profit/loss; optional daily progress. |
+| 0.5 | Implemented in the 0.7 candidate | Source-qualified upcoming earnings, configurable warnings, date corrections and exposure. |
+| 0.6 | Implemented in the 0.7 candidate | Meaningful CEO/CFO/director purchases with filing links and non-derivative verification. |
+| 0.7 | Ready to deploy | Source-linked news extracts, labelled heuristic sentiment and an optional combined morning briefing. |
+| **0.8 — next** | Planned | Timestamped daily predictions/suggestions, evaluated with a separate paper portfolio before considering real holdings. |
 
-Ship these as small usable additions. Each release reuses the current prices,
-Telegram controls, durable delivery and storage rather than starting another app.
+See [0.7 release notes and walkthrough](release-0.7.md), the
+[completed implementation checklist](../todo05-07.md) and
+[verification record](validation.md#07-candidate-2026-11-04).
 
 ## 0.4 — positions, purchase prices and progress
 
-The 0.4 implementation adds EUR/USD reporting and historical FX. Its commands and
-operational limits are documented in [the 0.4 release notes](release-0.4.md).
-The following section retains the original planning context; deployed 0.3 remains
-the live release until the owner performs the 0.4 rollout.
+The durable transaction ledger supports fractional quantities, repeated buys,
+partial sales, fees and auditable void/quantity/basis corrections. Decimal money
+arithmetic and weighted-average cost drive realized/unrealized results. Trades
+are records entered by the owner, not brokerage orders.
 
-Record what was bought, how much, at what price and when. Start with long
-positions in supported US-listed USD stocks, including fractional quantities.
-These commands record transactions entered by the owner; they do not place
-brokerage orders.
+`/currency EUR` sets input and reporting defaults. For example,
+`/buy GOOGL 5 100 EUR` records five shares at EUR 100 per share. Compatible USD
+market prices are converted with current Frankfurter/ECB reference FX; original
+transactions and execution-date FX provenance remain saved. Pending FX,
+missing/stale prices and partial totals are explicit. A watchlist removal does
+not delete a holding or its price coverage.
 
-### Proposed Telegram commands
-
-| Command | Purpose |
-| --- | --- |
-| `/buy VST 10 140.50` | Record a purchase of 10 shares at USD 140.50; default date is today. |
-| `/buy VST 5 138.00 2026-11-03` | Record another purchase, optionally with an explicit date. |
-| `/sell VST 4 150.00` | Record a full or partial sale and its realized result. |
-| `/portfolio` | Show holdings, invested cost, observed market value and unrealized profit/loss. |
-| `/position VST` | Show quantity, average entry, source price/time, cost basis and position return. |
-| `/trades VST` | List recorded transactions with IDs so mistakes can be corrected. |
-| `/trade_void ID` | Void a mistaken record and recalculate the position, retaining the correction history. |
-| `/portfolio_summary 23:00` or `/portfolio_summary off` | Configure an optional daily progress message in the owner's timezone. |
-
-### First implementation
-
-1. **Transaction ledger.** Persist purchases, sales, quantity, execution price,
-   currency, date and optional fees. Support repeated purchases, partial sales and
-   corrections. Reject overselling and invalid quantities/prices. Use decimal
-   arithmetic for money and quantities; weighted-average cost is the initial
-   reporting convention, with rounding only for display.
-2. **Position valuation.** Reuse compatible Finnhub observations for the ticker.
-   Show quantity, average entry, remaining cost basis, market value, unrealized
-   profit/loss in USD and percent, and realized profit/loss for recorded sales.
-   For an open position, `value = quantity × price`, `unrealized P/L = value −
-   remaining cost basis`, and `return = unrealized P/L / remaining cost basis ×
-   100`. Recorded fees feed into the cost/proceeds calculations. Totals initially
-   describe recorded holdings in USD, not a complete brokerage account balance.
-3. **Telegram progress.** Provide an on-demand portfolio report and an opt-in
-   daily summary: invested cost, current value, gains/losses, largest contributors
-   and changes since the previous comparable snapshot. Distinguish market moves
-   from purchases/sales; deposits or a new purchase must not look like profit.
-   Reuse cached prices instead of fetching once per message. Pause suppresses
-   automatic progress messages while manual reports remain available.
-4. **Price and ownership correctness.** Display source time and fresh/stale/closed
-   status. Report missing valuations explicitly and label partial totals. A
-   watchlist removal never deletes an owned position or stops its required price
-   coverage. Use the union of watched and held symbols for subscription limits;
-   report the free-plan capacity before silently losing coverage. Changes to
-   quantities or cost basis from splits require an explicit adjustment when the
-   feed cannot verify them.
-5. **Durable foundation.** Keep transaction records and open-position cost basis
-   independently of three-month market-price expiry. Retain compact daily
-   portfolio snapshots for three calendar months initially. Preserve the ledger
-   through restarts, upgrades and backup restores; provide explicit correction
-   or deletion controls. These records become inputs to later exposure/risk
-   analysis and the advisor.
-
-Keep the existing previous-close dip rule separate from a position's gain/loss
-relative to purchase cost. Entry-price alerts and richer risk rules can follow
-the initial portfolio release rather than delaying it.
-
-Done means a recorded purchase is valued against the feed, a second purchase and
-partial sale calculate correctly, stale/missing prices are labelled, and the
-owner can receive one scheduled progress message with settings preserved after a
-service restart. Keep a few focused arithmetic/ledger tests and one Telegram
-walkthrough for this feature.
+`/portfolio`, `/position`, `/trades`, `/sell`, `/trade_void`, `/position_adjust`,
+`/basis_adjust` and `/portfolio_summary` are implemented. Daily progress excludes
+holdings whose trade history changed, so new purchases/sales do not look like
+market gains. Ledger and historical transaction FX do not expire with market
+history. Details: [0.4 release contract](release-0.4.md).
 
 ## 0.5 — earnings watchdog
 
-Find upcoming reports for held and watched companies. Verify source access and
-date certainty, retain when the information was checked, and send configurable
-warnings such as 3–5 days before earnings. Handle date changes and deduplicate
-warnings. Include position exposure where holdings exist. Source/plan limitations
-must be visible before enabling the feature.
+Implemented for held and watched symbols. Finnhub calendars are queried per
+symbol; Alpha Vantage's cached bulk CSV is an explicit fallback. Provider-reported
+dates, fiscal periods, time categories and checked times remain visible. Source
+conflicts are distinguished from verified date revisions.
+
+`/earnings`, `on`, `off` and `refresh` provide cached views and background work.
+Warnings default to five calendar days (configurable 1–14), include available
+position exposure and are durably deduplicated. Date changes generate separate
+corrections. Sources/limitations: [earnings research](research-0.5-earnings.md).
 
 ## 0.6 — insider purchases
 
-Track structured filings or a verified feed for meaningful CEO/CFO/director
-open-market purchases. Distinguish purchases from grants, exercises and other
-transaction types. Save transaction date, filing/publication date, role, size and
-source link, and deduplicate amended or repeated records. Connect alerts to held
-and watched stocks. Later prediction inputs use the time the filing was actually
-available, not an earlier transaction date.
+Implemented with Tracefour filings and Finnhub cross-checks. Qualified purchases
+require CEO/CFO/director roles, positive meaningful size and non-derivative
+verification; known grants/exercises, withholding and offering flags are excluded.
+Unknown eligibility remains visible without becoming an alert. SEC code P is
+labelled open-market/private when exchange execution is unproven.
+
+`/insiders`, `on`, `off`, `refresh` and a configurable USD minimum are available.
+Transaction and public filing times, source attribution, amendments and stable
+claims are retained. Activation/resume does not replay historical filings.
+Direct SEC enrichment remains optional future work. Details:
+[insider research](research-0.6-insiders.md).
 
 ## 0.7 — news and morning briefing
 
-Collect and deduplicate news for held/watched stocks. Produce concise summaries
-with source links, publication/receipt times and clearly labelled sentiment.
-The optional morning briefing combines news, earnings, insider activity,
-positions and recent market observations. Retain compact structured signals that
-the predictor can consume. Model/provider selection and any API spending cap are
-explicit configuration decisions; the briefing should still work without paid
-AI summarization.
+Implemented with Finnhub company-news and explicit Yahoo RSS fallback, canonical
+URL/ID deduplication, source links, publication/receipt times and compact daily
+signals. Summaries are two-sentence extracts from supplied snippets/headlines;
+sentiment is a labelled local heuristic. Paid or local model summarization is an
+optional later addition, not a prerequisite.
+
+`/news` provides cached reports and background refresh controls. `/briefing now`
+refreshes and combines news, earnings, insider activity, positions and cached
+market observations. An opt-in schedule runs once per configured local US trading
+day before market open. Missing/stale sections stay visible. All four new
+automations default off, share existing provider budgets, respect pause and keep
+HTTP work out of Telegram command handling. Details:
+[news research](research-0.7-news.md) and [release notes](release-0.7.md).
 
 ## 0.8 — daily predictor/advisor, evaluated with simulated positions
 
-Once positions, earnings, insider purchases and news are available, run one
-scheduled daily evaluation using their combined state. Start with a paper
+The 0.7 candidate provides positions, earnings, insider purchases and news as
+inputs. The next milestone is one scheduled daily evaluation using their combined state. Start with a paper
 portfolio and measure the outcome; recommendations remain messages for review.
 
 1. **Freeze the daily inputs.** Store an as-of timestamp and compact snapshot of
@@ -165,7 +126,7 @@ brokerage execution is outside this roadmap.
 ## Additional backlog
 
 Weekly/history comparisons, threshold ladders, recovery/rearming rules,
-entry-price alerts, dividends/FX and richer position risk analysis remain useful
+entry-price alerts, dividends, more currencies and richer position risk analysis remain useful
 follow-ups. They should support the release order above without blocking the
 first usable position tracker. Alpaca, Tiingo and Twelve Data remain documented
 in [provider research](market-data-research.md) for future use.

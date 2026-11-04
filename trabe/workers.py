@@ -5,6 +5,7 @@ import threading
 
 from trabe.api import ApiError
 from trabe.fx import FX
+from trabe.insights import Insights
 from trabe.maintenance import Maintenance
 from trabe.monitor import Monitor
 from trabe.portfolio import Portfolio
@@ -24,6 +25,7 @@ class Services:
             market.monitor = self.monitor
         self.fx = FX(store)
         self.portfolio = Portfolio(store, self.monitor)
+        self.insights = Insights(config, store, outbox, self.monitor)
         self.threads = []
 
     def start(self):
@@ -39,6 +41,7 @@ class Services:
             self.threads.append(thread)
         if self.monitor:
             self.monitor.start()
+        self.insights.start()
 
     def deliver(self):
         delay = 1
@@ -89,6 +92,7 @@ class Services:
             self.stop.wait(60)
 
     def close(self):
+        self.insights.close()
         if self.monitor:
             self.monitor.close()
         self.stop.set()

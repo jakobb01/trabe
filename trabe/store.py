@@ -11,11 +11,13 @@ from pathlib import Path
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Store(MarketStorage):
     def __init__(self, path: Path):
+        from trabe.signals import SIGNAL_SCHEMA
+
         self.path = path
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -56,7 +58,7 @@ class Store(MarketStorage):
                 );
             """)
             db.execute("BEGIN IMMEDIATE")
-            for statement in SCHEMA:
+            for statement in (*SCHEMA, *SIGNAL_SCHEMA):
                 db.execute(statement)
             trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
             for column in ("fx_from", "fx_to"):

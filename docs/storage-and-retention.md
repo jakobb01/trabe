@@ -1,9 +1,37 @@
-# Storage and retention for trabe 0.3
+# Storage and retention for trabe
 
 Decision date: 2026-11-03. Finnhub WebSocket is the selected intraday source.
 Other providers remain documented in [the research](market-data-research.md) for
 future use. This document specifies the implemented retention policy; measurements
 and deployment evidence are recorded separately in [validation](validation.md).
+
+## Earnings, insiders and news in 0.7
+
+The 0.7 candidate adds bounded JSON signal records, not another tick archive or
+full article collection. Event/publication time, first observation, availability
+and source/method metadata support later forward advisor experiments.
+
+| Signal | Additional row limit |
+| --- | --- |
+| News articles | 20 per symbol; 1,000 globally, deduplicated across symbols |
+| Frozen daily news signals | 4,500 globally |
+| Insider transactions | 100 per symbol; 5,000 globally |
+| Earnings events | 2,000 globally |
+| Briefing snapshots | 100 globally |
+
+Payloads are limited to 32 KiB each; normal records are substantially smaller.
+These row limits are ceilings, not storage estimates. The 0.3 measurements below
+cover price tables only and must not be read as measurements of these new tables.
+
+Compact news, insider, daily-signal and briefing history expires by event date
+after three calendar months, even when an old item is fetched again. Other signal
+metadata expires after three months without observation; a future earnings event
+is preserved. Notification claims/source state expire after the same retention
+window. Finished refresh jobs expire after one day, hourly request records after
+one hour, and HTTP response caches after seven days. Refresh jobs are capped at
+16 active requests. Existing disk-pressure controls and bounded automatic backups
+still apply. Transaction records and saved transaction FX are never removed by
+this signal cleanup.
 
 ## Selected policy
 

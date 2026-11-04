@@ -42,7 +42,7 @@ class Outbox:
         with self.store.connection() as db:
             db.execute("DELETE FROM outbox WHERE created_at < ?", (time.time() - 86400,))
             if self.store.automation_paused():
-                db.execute("DELETE FROM outbox WHERE kind IN ('alert','summary','notice')")
+                db.execute("DELETE FROM outbox WHERE kind!='reply'")
             if self.store.settings()["monitoring"] == "off":
                 db.execute("DELETE FROM outbox WHERE kind='alert'")
         for _ in range(limit):
@@ -54,8 +54,13 @@ class Outbox:
                 break
             item_id, chat_id, text, markup, kind = row
             # Recheck every message: pause may have arrived during the previous send.
-            if (kind in ("alert", "summary", "notice") and self.store.automation_paused()) or (
-                kind == "alert" and self.store.settings()["monitoring"] != "on"
+            if (
+                (kind != "reply" and self.store.automation_paused())
+                or (kind == "alert" and self.store.settings()["monitoring"] != "on")
+                or (
+                    kind in ("earnings", "insiders", "news", "briefing")
+                    and self.store.settings().get(kind + "_enabled") != "on"
+                )
             ):
                 with self.store.connection() as db:
                     db.execute("DELETE FROM outbox WHERE id=?", (item_id,))

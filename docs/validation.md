@@ -22,6 +22,52 @@ soak. These run in the production image with no external networking, a read-only
 root filesystem, no capabilities and a 256 MB memory limit.
 For isolated Podman storage, set `CHECK_RUNTIME_ROOT=/tmp/trabe-check`.
 
+## 0.7 candidate (2026-11-04)
+
+Milestones 0.5–0.7 are implemented against [the checklist](../todo05-07.md).
+Research agents recorded source access/constraints before separate coding agents
+implemented earnings, insiders and news. The final integration/review stayed with
+one agent. The Pi remains on 0.4.0; no candidate deployment or real Telegram
+polling/messages were performed during this work.
+
+| Evidence | Result and scope |
+| --- | --- |
+| Assembled baseline unit suite | 176 tests passed at the earlier integration checkpoint, in 15.991 seconds. Not rerun after focused review fixes. |
+| Earnings | 13 focused tests passed, including fiscal identity, revisions/conflicts, cached Alpha expansion, receipt timestamps and after-close uncertainty. |
+| Insider purchases | 13 focused tests passed, including role/size/derivative matching, amendments, first-run seed, receipt time and durable claims. |
+| News | 12 focused tests passed, including RSS fallback, cross-symbol deduplication, frozen as-of data, limits and extract/sentiment labels. |
+| Shared transport/runtime units | 12 focused tests passed after final fixes, including Alpha quota/invalid CSV handling, atomic outbox claims, schema 4→5 preservation, cleanup and morning scheduling. One existing retention/preservation case also passed. |
+| Combined HTTP runtime | One isolated walkthrough passed in 12.361 seconds: real urllib transport, Telegram authorization/commands, responsive status during a blocked fetch, combined manual digest, one automatic earnings warning, pause/manual views and restart without duplicate warnings or cache refetch. |
+
+The HTTP walkthrough used fixture credentials, a temporary SQLite database and
+loopback endpoints inside an existing tools container with external networking
+disabled, read-only source/root filesystem, no capabilities and a 256 MB limit.
+Its first attempt exposed a fixture URL-routing mistake; correcting the fixture
+produced the passing run. No application failure was hidden. Final schedule and
+retention fixes were checked by their affected unit cases, reusing the passing
+manual-runtime walkthrough for unchanged paths.
+
+Live adapters were checked separately with the existing keys and a private
+temporary database, never through Telegram or the Pi. GOOGL/VST yielded two
+earnings records, three qualified insider records and forty news extracts, with
+no source errors. Two daily news signals were saved. Alpha CSV contained VST;
+Yahoo RSS returned 19 items. That run used six Finnhub calls, one Alpha call and
+enqueued zero messages. Sanitized local evidence is in ignored
+`.local/validation/insights-live.json`. This proves observed access for the
+current account, not future provider availability or complete market coverage.
+
+Ruff lint/format checks cover changed Python files; whitespace and documentation
+links are reviewed. No new image build, ARM/QEMU run, storage soak or repeated
+broad suite was required: runtime dependencies and deployment configuration are
+unchanged. On deployment, use the installer's existing build/readiness/delivery
+checks and [one Telegram walkthrough](release-0.7.md#one-walkthrough-after-deployment).
+
+To repeat only the new HTTP boundary check when a change warrants it:
+
+```sh
+python3 -m unittest discover -s tests -p integration_signals.py -v
+```
+
 ## Position release: 0.4 review (2026-11-03)
 
 Reviewed the implementation against `todo04.md`: EUR/USD defaults and explicit
@@ -42,9 +88,10 @@ recheck pause before the next FX request in a batch. Portfolio and Currency
 buttons were added to the persistent Telegram keyboard.
 
 The owner rebooted the Pi after an initial SSH connection refusal. Its 0.3 service
-returned with the existing settings and watchlist intact. The 0.4 deployment is
-in progress through the usual script; the owner walkthrough is documented in
-[the release notes](release-0.4.md).
+returned with the existing settings and watchlist intact. The subsequent 0.4
+rollout completed through the usual script; the owner walkthrough is documented
+in [the release notes](release-0.4.md). This remains the deployed baseline while
+the 0.7 candidate awaits rollout.
 
 ## Intraday release: 0.3 (2026-11-03)
 

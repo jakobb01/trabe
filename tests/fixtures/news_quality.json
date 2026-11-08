@@ -1,0 +1,425 @@
+{
+  "purpose": "Synthetic acceptance cases; not an independent predictive benchmark. Keep event families together for future model comparison.",
+  "cases": [
+    {
+      "family": "raised_guidance",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Vistra raises guidance",
+      "expected": "Bullish"
+    },
+    {
+      "family": "raised_guidance",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Alphabet raised its forecast",
+      "expected": "Bullish"
+    },
+    {
+      "family": "raised_guidance",
+      "split": "development",
+      "ticker": "MSFT",
+      "headline": "Microsoft raising outlook for next year",
+      "expected": "Bullish"
+    },
+    {
+      "family": "raised_guidance",
+      "split": "development",
+      "ticker": "AAPL",
+      "headline": "Apple raises its outlook",
+      "expected": "Bullish"
+    },
+    {
+      "family": "raised_guidance",
+      "split": "development",
+      "ticker": "AMZN",
+      "headline": "Amazon raising its forecast",
+      "expected": "Bullish"
+    },
+    {
+      "family": "lowered_guidance",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Vistra cuts guidance",
+      "expected": "Bearish"
+    },
+    {
+      "family": "lowered_guidance",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Alphabet lowered its forecast",
+      "expected": "Bearish"
+    },
+    {
+      "family": "lowered_guidance",
+      "split": "development",
+      "ticker": "MSFT",
+      "headline": "Microsoft lowers outlook",
+      "expected": "Bearish"
+    },
+    {
+      "family": "lowered_guidance",
+      "split": "development",
+      "ticker": "AAPL",
+      "headline": "Apple cuts its outlook",
+      "expected": "Bearish"
+    },
+    {
+      "family": "lowered_guidance",
+      "split": "development",
+      "ticker": "AMZN",
+      "headline": "Amazon cuts forecast",
+      "expected": "Bearish"
+    },
+    {
+      "family": "negation",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Vistra did not raise guidance",
+      "expected": "Neutral"
+    },
+    {
+      "family": "negation",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Alphabet did not cut guidance",
+      "expected": "Neutral"
+    },
+    {
+      "family": "negation",
+      "split": "development",
+      "ticker": "IBM",
+      "headline": "IBM faces no investigation",
+      "expected": "Neutral"
+    },
+    {
+      "family": "negation",
+      "split": "development",
+      "ticker": "MSFT",
+      "headline": "Microsoft denies lawsuit reports",
+      "expected": "Neutral"
+    },
+    {
+      "family": "negation",
+      "split": "development",
+      "ticker": "AAPL",
+      "headline": "Apple did not win regulatory approval",
+      "expected": "Neutral"
+    },
+    {
+      "family": "factual",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Vistra schedules annual meeting",
+      "expected": "Neutral"
+    },
+    {
+      "family": "factual",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Alphabet publishes quarterly reporting date",
+      "expected": "Neutral"
+    },
+    {
+      "family": "factual",
+      "split": "development",
+      "ticker": "IBM",
+      "headline": "IBM appoints a new director",
+      "expected": "Neutral"
+    },
+    {
+      "family": "factual",
+      "split": "development",
+      "ticker": "AAPL",
+      "headline": "Apple announces a product event",
+      "expected": "Neutral"
+    },
+    {
+      "family": "factual",
+      "split": "development",
+      "ticker": "AMZN",
+      "headline": "Amazon opens a warehouse",
+      "expected": "Neutral"
+    },
+    {
+      "family": "target_specific",
+      "split": "candidate_holdout",
+      "ticker": "GOOGL",
+      "headline": "Alphabet beats estimates but Vistra misses expectations",
+      "expected": "Bullish"
+    },
+    {
+      "family": "target_specific",
+      "split": "candidate_holdout",
+      "ticker": "VST",
+      "headline": "Alphabet beats estimates but Vistra misses expectations",
+      "expected": "Bearish"
+    },
+    {
+      "family": "target_specific",
+      "split": "candidate_holdout",
+      "ticker": "MSFT",
+      "headline": "Microsoft misses expectations while Amazon beats estimates",
+      "expected": "Bearish"
+    },
+    {
+      "family": "target_specific",
+      "split": "candidate_holdout",
+      "ticker": "AMZN",
+      "headline": "Microsoft misses expectations while Amazon beats estimates",
+      "expected": "Bullish"
+    },
+    {
+      "family": "target_specific",
+      "split": "candidate_holdout",
+      "ticker": "AAPL",
+      "headline": "Apple schedules an event. Vistra cuts guidance",
+      "expected": "Neutral"
+    },
+    {
+      "family": "ambiguous_tickers",
+      "split": "candidate_holdout",
+      "ticker": "AI",
+      "headline": "AI is changing software",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "ambiguous_tickers",
+      "split": "candidate_holdout",
+      "ticker": "A",
+      "headline": "A record profit was reported",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "ambiguous_tickers",
+      "split": "candidate_holdout",
+      "ticker": "ON",
+      "headline": "Shares are on track for a recovery",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "ambiguous_tickers",
+      "split": "candidate_holdout",
+      "ticker": "F",
+      "headline": "F schedules a meeting",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "ambiguous_tickers",
+      "split": "candidate_holdout",
+      "ticker": "NOW",
+      "headline": "Now is a good time to buy",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "explicit_tickers",
+      "split": "development",
+      "ticker": "AI",
+      "headline": "$AI raises guidance",
+      "expected": "Bullish"
+    },
+    {
+      "family": "explicit_tickers",
+      "split": "development",
+      "ticker": "ON",
+      "headline": "NYSE: ON cuts guidance",
+      "expected": "Bearish"
+    },
+    {
+      "family": "explicit_tickers",
+      "split": "development",
+      "ticker": "A",
+      "headline": "$A schedules a meeting",
+      "expected": "Neutral"
+    },
+    {
+      "family": "explicit_tickers",
+      "split": "development",
+      "ticker": "F",
+      "headline": "NASDAQ: F beats estimates",
+      "expected": "Bullish"
+    },
+    {
+      "family": "explicit_tickers",
+      "split": "development",
+      "ticker": "NOW",
+      "headline": "$NOW reports weak profit",
+      "expected": "Bearish"
+    },
+    {
+      "family": "eps_comparison",
+      "split": "candidate_holdout",
+      "ticker": "VST",
+      "headline": "Vistra reports EPS 1.20 vs expected 1.00",
+      "expected": "Bullish"
+    },
+    {
+      "family": "eps_comparison",
+      "split": "candidate_holdout",
+      "ticker": "GOOGL",
+      "headline": "Alphabet reports EPS 0.50 vs expected 1.00",
+      "expected": "Bearish"
+    },
+    {
+      "family": "eps_comparison",
+      "split": "candidate_holdout",
+      "ticker": "IBM",
+      "headline": "IBM reports EPS -0.10 vs expected -0.20",
+      "expected": "Bullish"
+    },
+    {
+      "family": "eps_comparison",
+      "split": "candidate_holdout",
+      "ticker": "MSFT",
+      "headline": "Microsoft reports EPS 1.00 vs expected 1.00",
+      "expected": "Neutral"
+    },
+    {
+      "family": "eps_comparison",
+      "split": "candidate_holdout",
+      "ticker": "AAPL",
+      "headline": "Apple reports EPS 1.20 vs expected 2.00",
+      "expected": "Bearish"
+    },
+    {
+      "family": "mixed_outcomes",
+      "split": "candidate_holdout",
+      "ticker": "VST",
+      "headline": "Vistra beats expectations but cuts guidance",
+      "expected": "Neutral"
+    },
+    {
+      "family": "mixed_outcomes",
+      "split": "candidate_holdout",
+      "ticker": "GOOGL",
+      "headline": "Alphabet reports revenue growth but faces investigation",
+      "expected": "Neutral"
+    },
+    {
+      "family": "mixed_outcomes",
+      "split": "candidate_holdout",
+      "ticker": "MSFT",
+      "headline": "Microsoft reports record profit and lower demand",
+      "expected": "Neutral"
+    },
+    {
+      "family": "mixed_outcomes",
+      "split": "candidate_holdout",
+      "ticker": "AAPL",
+      "headline": "Apple misses expectations but raises guidance",
+      "expected": "Neutral"
+    },
+    {
+      "family": "mixed_outcomes",
+      "split": "candidate_holdout",
+      "ticker": "AMZN",
+      "headline": "Amazon raised guidance however weak profit persists",
+      "expected": "Neutral"
+    },
+    {
+      "family": "unrelated_company",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Alphabet reports strong profit",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "unrelated_company",
+      "split": "development",
+      "ticker": "IBM",
+      "headline": "Amazon cuts guidance",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "unrelated_company",
+      "split": "development",
+      "ticker": "MSFT",
+      "headline": "Apple reports record revenue",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "unrelated_company",
+      "split": "development",
+      "ticker": "AAPL",
+      "headline": "Vistra faces an investigation",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "unrelated_company",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Microsoft beats estimates",
+      "expected": "No clear signal"
+    },
+    {
+      "family": "macro_context",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Energy sector reports strong demand",
+      "expected": "Bullish"
+    },
+    {
+      "family": "macro_context",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Software sector reports weak demand",
+      "expected": "Bearish"
+    },
+    {
+      "family": "macro_context",
+      "split": "development",
+      "ticker": "IBM",
+      "headline": "Inflation data arrives tomorrow",
+      "expected": "Neutral"
+    },
+    {
+      "family": "macro_context",
+      "split": "development",
+      "ticker": "AAPL",
+      "headline": "Federal Reserve announces interest rate decision",
+      "expected": "Neutral"
+    },
+    {
+      "family": "macro_context",
+      "split": "development",
+      "ticker": "AMZN",
+      "headline": "Retail industry reports higher revenue",
+      "expected": "Bullish"
+    },
+    {
+      "family": "material_updates",
+      "split": "development",
+      "ticker": "VST",
+      "headline": "Correction: Vistra cuts guidance",
+      "expected": "Bearish"
+    },
+    {
+      "family": "material_updates",
+      "split": "development",
+      "ticker": "GOOGL",
+      "headline": "Updated: Alphabet raises forecast",
+      "expected": "Bullish"
+    },
+    {
+      "family": "material_updates",
+      "split": "development",
+      "ticker": "MSFT",
+      "headline": "Microsoft wins regulatory approval",
+      "expected": "Bullish"
+    },
+    {
+      "family": "material_updates",
+      "split": "development",
+      "ticker": "IBM",
+      "headline": "IBM downgraded by an analyst",
+      "expected": "Bearish"
+    },
+    {
+      "family": "material_updates",
+      "split": "development",
+      "ticker": "AMZN",
+      "headline": "Amazon announces a buyback",
+      "expected": "Bullish"
+    }
+  ]
+}

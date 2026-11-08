@@ -5,11 +5,21 @@ It runs on a Debian/Raspbian Raspberry Pi with Podman Quadlet and SQLite. It nee
 outbound HTTPS/WebSocket connections and your existing SSH connection;
 **no website or new inbound port**.
 
-Version 0.7 is ready for deployment: earnings warnings, verified insider-purchase
-reports, company-news extracts and an optional morning briefing. The existing
-0.4 ledger, EUR/USD portfolio valuation, daily progress and Finnhub dip monitoring
-remain available. New automation defaults off. The service records trades you
-have already made; it never places orders. See the [0.7 release notes](docs/release-0.7.md).
+Version **0.8.6** adds indicative premarket prices, SPY/QQQ references, delayed
+VIX, broad-market news and shared article extracts to briefings. It retains wider
+insider purchase coverage, local session times and the earnings evidence/estimate
+fixes. It includes
+the 0.8 company-level news quality, optional Massive sentiment
+cross-checks and immutable daily decision snapshots. Telegram keeps
+**Bullish / Neutral / Bearish with signed bias**, distinct stories and visible
+disagreement or missing evidence. Snapshot capture defaults off and uses cached
+inputs. Earnings expectations/history/results, insider reports, the morning
+briefing, EUR/USD ledger, daily progress and Finnhub monitoring remain available.
+The service records trades you have already made; it never places orders.
+See the [0.8 release notes and walkthrough](docs/release-0.8.md),
+[0.8.5 insider/timezone changes](docs/release-0.8.5.md),
+[0.8.6 market context and richer news](docs/release-0.8.6.md),
+[message examples](docs/messages.md) and [earnings notes](docs/release-0.7.2.md).
 
 The [feature roadmap](docs/next-features.md) defines the next releases. The
 [storage plan](docs/storage-and-retention.md) keeps minute detail during the session,
@@ -32,6 +42,8 @@ automatically without running pip on the Pi.
    `.env` with mode 0600.
    Add `FINNHUB_API_KEY=...` privately to that file. A webhook secret is unnecessary
    for the outbound WebSocket feed.
+   Optional news cross-checks use `MASSIVE_API_KEY`; see the
+   [0.8 walkthrough](docs/release-0.8.md#configure-and-try-the-features-after-deployment).
 4. Copy `.env.deploy.example` to `.env.deploy` and set your SSH user, host and port.
 5. Run `bash scripts/deploy.sh` from a terminal with SSH access.
 
@@ -61,9 +73,10 @@ for the new features and [0.4 notes](docs/release-0.4.md) for portfolio setup.
 | `/trades GOOGL`, `/trade_void ID` | List transactions and void an incorrect entry |
 | `/position_adjust GOOGL 10`, `/basis_adjust GOOGL 500 EUR` | Record explicit quantity or remaining-basis corrections |
 | `/portfolio_summary 23:00`, `/portfolio_summary off` | Enable/disable daily portfolio progress |
-| `/earnings [VST\|on\|off\|refresh]` | Cached schedules, upcoming warnings and date corrections |
-| `/insiders [VST\|on\|off\|refresh]` | Qualified purchase reports, source links and alerts |
-| `/news [VST\|on\|off\|refresh]` | Source-linked extracts and labelled heuristic sentiment |
+| `/earnings [VST\|cached\|on\|off\|refresh]` | Estimates, four-quarter EPS history, warnings and result updates |
+| `/insiders [VST\|cached\|on\|off\|refresh]` | Qualified purchase reports, source links and alerts |
+| `/news [VST\|cached\|on\|off\|refresh\|sources]` | Company bias, distinct stories and optional second assessments |
+| `/snapshot [latest\|now\|YYYY-MM-DD\|on\|off]` | Immutable cached inputs and silent daily capture |
 | `/briefing [now\|08:00\|on\|off]` | Manual digest or optional scheduled morning briefing |
 | `/status` | Service health, watchlist size, scan state and request budget |
 | `/test` | Confirm message delivery |
@@ -95,6 +108,11 @@ saved organizational label; it does not change alert severity in this release.
 | `portfolio_summary_time` | `off` | `HH:MM` or `off` |
 | `earnings_enabled`, `insiders_enabled`, `news_enabled`, `briefing_enabled` | `off` | `on` or `off` |
 | `briefing_time` | `08:00` | `HH:MM` in the saved timezone; enabling is separate with `/set` |
+| `news_sources` | `finnhub,yahoo` | Comma-separated `finnhub,yahoo,massive,marketaux`; extra keys required |
+| `news_second_view` | `on` | `on` or `off` |
+| `massive_daily_budget` / `marketaux_daily_budget` | `200` / `80` | 1–1000 / 1–80 attempts per UTC day |
+| `snapshot_enabled` | `off` | `on` or `off`; also controls daily news preparation |
+| `snapshot_time` | `preopen-30m` | Relative to US open, or `HH:MM` in the saved timezone |
 | `earnings_warning_days` | `5` | 1–14 calendar days |
 | `insider_min_value_usd` | `10000` | 1000–1000000000 USD |
 | `timezone` | `Europe/Ljubljana` | IANA timezone, e.g. `America/New_York` |
@@ -136,8 +154,11 @@ original trade amounts. Returns include currency movement and recorded fees.
 `/pause` suppresses automatic delivery while manual reports remain available.
 Progress compares positions with unchanged trade histories and excludes changed
 or unavailable positions, so purchases and sales are not treated as gains.
-Transactions and their FX provenance do not expire; compact daily snapshots
+Transactions and their FX provenance do not expire; daily portfolio progress records
 expire after three calendar months.
+Decision snapshots are separate frozen input packets: automatic packets expire
+after three calendar months; manual packets after seven days or the 32-row cap.
+Each is limited to 256 KiB. See [the snapshot contract](docs/release-0.8.md#what-a-snapshot-saves).
 
 ## Data freshness, costs and scheduling
 
@@ -198,8 +219,23 @@ provider outage, and report partial results clearly. There is one scan worker;
 `/status` remains available while it works. Earnings, insider purchases and news
 use a separate bounded background worker, existing request budgets and cached
 views. Briefings can refresh all sections while standalone automation is off.
-News summaries are extractive and sentiment is heuristic; model-based summaries,
-weekly comparisons and the paper-trading advisor remain future work.
+The bare `/earnings`, `/insiders` and `/news` commands queue a refresh and send
+the report when finished; add a ticker to refresh one company. Use e.g.
+`/news cached` or `/news cached VST` for an immediate view without requests.
+Provider budgets and cooldowns can leave the refreshed report partial or cached.
+When structured earnings feeds lag, a free Yahoo news fallback can show an
+explicit current-quarter basic/diluted EPS with source and currency. These news
+figures have no beat/miss grade when a comparable estimate is unverified.
+Saved calendar estimates remain visible separately in earnings reports and
+briefing cards, labelled with their forecast source.
+The disputed Alpha Vantage result fallback is disabled. Insider
+reports show source counts and coverage gaps; `/insider` also works.
+News messages show sentiment with signed bias (−1.0 to +1.0) and short headlines,
+without source links or provider details. Earnings messages show dates/countdowns
+without source links; insider reports emphasize value, roles and filing dates.
+Richer extracts and provenance remain saved. Sentiment is
+heuristic; our own LLM/classifier, weekly comparisons and the paper-trading
+advisor remain future work.
 
 ## Development
 

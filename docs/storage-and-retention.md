@@ -1,11 +1,39 @@
 # Storage and retention for trabe
 
-Decision date: 2026-11-03. Finnhub WebSocket is the selected intraday source.
+Price-source decision: 2026-11-03; news/snapshot bounds updated 2026-11-04. Finnhub WebSocket is the selected intraday source.
 Other providers remain documented in [the research](market-data-research.md) for
 future use. This document specifies the implemented retention policy; measurements
 and deployment evidence are recorded separately in [validation](validation.md).
 
-## Earnings, insiders and news in 0.7
+## News revisions and decision snapshots in 0.8
+
+The new authority stores six bounded news tables: canonical articles, observed
+content revisions, provider observations, ticker associations, analyses and event
+memberships. Both provider variants and first-availability times survive URL
+deduplication. Old `signals(kind='news')`/`news_daily` rows are legacy data and
+are not dual-written by the new news service.
+
+Limits shared across sources: 1,000 current articles / 20 per ticker, 5,000
+revisions, and 10,000 each for provider observations, associations, analyses and
+event memberships. An annotation bundle is at most 4 KiB and an analysis 8 KiB.
+Inputs are bounded to 512 headline / 4,096 snippet characters. Distinct event
+representatives get article slots before additional copies; cap-related coverage
+loss is recorded. Old publication/observation data and derived cache/source state
+expire through the three-calendar-month exchange-local cutoff.
+
+`decision_snapshots` stores canonical JSON and its SHA-256 hash; `snapshot_runs`
+holds scheduling bookkeeping. Finalized records reject updates/replacements.
+Automatic records expire after three calendar months. Manual records expire
+after seven days, have a global cap of 32 and a one-minute creation interval.
+Each packet is at most 256 KiB; optional evidence trims explicitly before a
+too-large capture fails. No holdings are silently dropped. These records copy
+their compact evidence and do not cascade away when news inputs expire.
+
+See [release bounds](release-0.8.md#migration-and-bounds) and
+[measured fixture payload sizes](validation.md#08-news-and-snapshots).
+The prior 0.7 cache contract follows for interpreting older releases/backups.
+
+## Earnings, insiders and news in 0.7 (historical)
 
 The 0.7 candidate adds bounded JSON signal records, not another tick archive or
 full article collection. Event/publication time, first observation, availability
@@ -17,9 +45,27 @@ and source/method metadata support later forward advisor experiments.
 | Frozen daily news signals | 4,500 globally |
 | Insider transactions | 100 per symbol; 5,000 globally |
 | Earnings events | 2,000 globally |
+| Latest-four EPS history snapshots (0.7.2) | One per symbol; 1,000 globally |
 | Briefing snapshots | 100 globally |
 
+The 0.8.5 insider coverage patch raises the per-symbol purchase bound from 100
+to 500, matching the bounded primary response. The global 5,000-row and
+three-month limits still apply. New snapshots inspect the retained set before
+choosing up to three eligible facts; existing snapshot packets remain immutable.
+
 Payloads are limited to 32 KiB each; normal records are substantially smaller.
+
+0.8.6 adds a current market-context row per symbol (1,000 globally), plus one
+latest market-news packet with at most ten stories/30 KiB. They use existing
+signal retention. A shared parsed-article cache in `signal_http_cache` caps at
+32 documents/128 KiB each, keeps at most 100,000 text characters per document,
+refreshes after six hours and expires after seven days. Invalid/failed reads get
+one-hour negative caching. Raw HTML and complete intraday chart arrays are not
+archived. Source text extracts and their observation history remain in the
+existing bounded news pipeline; these are not additions to immutable v1 packets.
+EPS history snapshots deliberately contain the latest four quarters, including
+older fiscal periods, with a current as-of time. Inactive snapshots expire after
+three months; they do not create an accumulating four-quarter archive per day.
 These row limits are ceilings, not storage estimates. The 0.3 measurements below
 cover price tables only and must not be read as measurements of these new tables.
 

@@ -1,5 +1,12 @@
 # trabe 0.7.0 — earnings, insider purchases and morning briefing
 
+**0.7.1 presentation update:** Telegram reports now use bold headings/tickers and
+italic notes. News shows bullish/neutral/bearish with signed bias, short headlines
+and age; links and provider metadata stay saved rather than appearing in news
+messages. Earnings messages omit source links; insider messages emphasize value,
+roles and filing dates. The underlying 0.7 features and storage remain as described below.
+See [message examples](messages.md).
+
 Release candidate prepared 2026-11-04. This combines roadmap milestones 0.5–0.7.
 The Pi remains on 0.4.0; this work has not deployed, committed or pushed anything.
 

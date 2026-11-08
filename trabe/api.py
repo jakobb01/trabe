@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from trabe import __version__
+from trabe.presentation import message_entities
 from trabe.store import Store
 
 
@@ -90,7 +91,7 @@ class Telegram:
         return result.get("result")
 
     def send(self, chat_id: int, text: str, *, reply_markup: dict | None = None):
-        # Plain text avoids unescaped provider content being treated as HTML.
+        # Native entities style plain text safely, including older queued replies.
         with self._send_lock:
             for index, chunk in enumerate(message_chunks(text)):
                 delay = self._next_send - time.monotonic()
@@ -101,6 +102,9 @@ class Telegram:
                     "text": chunk,
                     "link_preview_options": {"is_disabled": True},
                 }
+                entities = message_entities(chunk)
+                if entities:
+                    payload["entities"] = entities
                 if index == 0 and reply_markup is not None:
                     payload["reply_markup"] = reply_markup
                 try:

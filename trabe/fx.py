@@ -104,14 +104,16 @@ class FX:
                     ),
                 )
 
-    def current(self, now=None):
+    def current(self, now=None, db=None):
         now = time.time() if now is None else now
         today = datetime.fromtimestamp(now, UTC).date()
-        with self.store.connection() as db:
-            row = db.execute(
-                "SELECT usd_per_eur,effective_date,provider,retrieved_at FROM fx_cache WHERE requested_date<=? ORDER BY requested_date DESC LIMIT 1",
-                (today.isoformat(),),
-            ).fetchone()
+        if db is None:
+            with self.store.connection() as connection:
+                return self.current(now, connection)
+        row = db.execute(
+            "SELECT usd_per_eur,effective_date,provider,retrieved_at FROM fx_cache WHERE requested_date<=? AND retrieved_at<=? ORDER BY requested_date DESC LIMIT 1",
+            (today.isoformat(), now),
+        ).fetchone()
         if not row or not 0 <= (today - date.fromisoformat(row[1])).days <= 7:
             return None
         return Decimal(row[0]), row[1], row[2], row[3]

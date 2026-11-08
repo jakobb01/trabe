@@ -22,6 +22,8 @@ class FixtureHTTP:
         self.store, self.kwargs = store, kwargs
 
     def finnhub(self, endpoint, **params):
+        if endpoint == "stock/earnings":
+            return []
         if endpoint == "calendar/earnings":
             return {
                 "earningsCalendar": [
@@ -171,6 +173,25 @@ class SignalTests(unittest.TestCase):
             self.assertEqual(http.alpha_csv("EARNINGS_CALENDAR", horizon="3month"), calendar)
         self.assertEqual(self.store.usage(), 3)
 
+    def test_alpha_fundamentals_share_budget_cache_and_reject_error_notices(self):
+        responses = iter(
+            (
+                b'{"symbol":"VST","quarterlyEarnings":[]}',
+                b'{"Information":"API request limit reached"}',
+            )
+        )
+        http = SignalHTTP(
+            self.config, self.store, opener=lambda *a, **kw: io.BytesIO(next(responses))
+        )
+        with patch.object(http, "_pace"):
+            self.assertEqual(http.alpha_json("EARNINGS", symbol="VST")["symbol"], "VST")
+            self.assertEqual(http.alpha_json("EARNINGS", symbol="VST")["symbol"], "VST")
+            self.assertEqual(self.store.usage(), 1)
+            with self.assertRaises(ApiError) as raised:
+                http.alpha_json("INCOME_STATEMENT", symbol="VST")
+            self.assertEqual(raised.exception.code, 429)
+        self.assertEqual(self.store.usage(), 2)
+
     def test_schema_upgrade_preserves_portfolio_and_retention_does_not_purge_ledger(self):
         ledger = Ledger(self.store)
         ledger.record("VST", "buy", "2", "100", "EUR", "2026-01-02")
@@ -223,9 +244,63 @@ class SignalTests(unittest.TestCase):
         self.assertEqual(self.store.settings()["earnings_enabled"], "off")
         self.assertIn("queued", bot.command("news", ["GOOGL"]))
         self.assertEqual(self.store.provider_usage("finnhub"), 0)
-        self.insights.process_job()
-        self.assertIn("Company raises guidance", self.insights.handle("news", ["GOOGL"]))
+        with patch("trabe.insights.time.time", return_value=self.now):
+            self.insights.process_job()
+            self.assertIn(
+                "Company raises guidance", self.insights.handle("news", ["cached", "GOOGL"])
+            )
         self.assertIn("queued", self.insights.handle("news", ["NVDA"]))
+
+    def test_default_reports_refresh_and_cached_reports_never_queue(self):
+        for kind in ("news", "insiders", "earnings"):
+            self.assertIn("queued", self.insights.handle(kind, []))
+            self.insights.process_job()
+
+            before = self.box.pending()
+            self.insights.handle(kind, ["cached", "VST"])
+            self.assertFalse(self.insights.process_job())
+            self.assertEqual(self.box.pending(), before)
+            self.assertIn("queued", self.insights.handle(kind, ["VST"]))
+            self.insights.process_job()
+
+    def test_singular_insider_alias_uses_same_refresh_and_cached_controls(self):
+        self.assertIn("queued", self.insights.handle("insider", ["VST"]))
+        self.insights.process_job()
+        self.assertIn("Insider purchases", self.insights.handle("insider", ["cached", "VST"]))
+
+    def test_news_job_reports_progress_and_finishes_when_optional_provider_fails(self):
+        from dataclasses import replace
+
+        self.store.add("GOOGL", 2)
+        self.store.set_setting("news_sources", "finnhub,massive")
+        config = replace(self.config, massive_key="massive-fixture")
+        observations = []
+        parent = self
+
+        class FailingSecondSource(FixtureHTTP):
+            def __init__(self, config, store, **kwargs):
+                super().__init__(config, store, **kwargs)
+                self.config = config
+
+            def news_api(self, *args, **kwargs):
+                observations.append(parent.insights.status())
+                raise ApiError("Signal provider network request failed.")
+
+        self.insights = Insights(config, self.store, self.box, http_factory=FailingSecondSource)
+        self.insights.queue("news")
+        self.insights.process_job()
+        self.assertIn("1/2 checked", self.insights.status())
+        self.assertEqual(self.box.pending(), 0)
+        self.insights.process_job()
+        self.assertEqual(self.box.pending(), 1)
+        self.assertTrue(all("running: 1" in status for status in observations))
+        self.assertIn("Massive unavailable", self.insights.handle("news", ["sources"]))
+        with self.store.connection() as db:
+            state, raw = db.execute(
+                "SELECT status,symbols FROM signal_jobs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(state, "completed")
+        self.assertEqual(__import__("json").loads(raw)["remaining"], [])
 
     def test_briefing_job_combines_sections_without_enabling_automation(self):
         self.assertIn("queued", self.insights.handle("briefing", ["now"]))
@@ -272,7 +347,7 @@ class SignalTests(unittest.TestCase):
         self.insights.queue("earnings", ["VST"])
         with patch("trabe.insights.time.time", return_value=self.now):
             self.assertTrue(self.insights.run_once(self.now))
-        self.assertIn("2026-11-06", self.insights.handle("earnings", ["VST"]))
+        self.assertIn("2026-11-06", self.insights.handle("earnings", ["cached", "VST"]))
 
 
 if __name__ == "__main__":

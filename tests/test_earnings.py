@@ -30,6 +30,8 @@ class FakeHTTP:
         self.calls.append(("finnhub", endpoint, params))
         if self.primary_error:
             raise self.primary_error
+        if endpoint == "stock/earnings":
+            return []
         return {
             "earningsCalendar": [
                 {
@@ -78,7 +80,7 @@ class EarningsTests(unittest.TestCase):
         self.http.extra = [{"symbol": "OTHER", "date": self.http.day, "year": 2026, "quarter": 3}]
         self.service.refresh(["VST"], now=self.now)
         self.service.refresh(["VST"], now=self.now + 10)
-        self.assertEqual(len(self.http.calls), 1)
+        self.assertEqual(len(self.http.calls), 2)
         self.assertEqual(self.http.calls[0][2]["symbol"], "VST")
         row = self.signals.rows("earnings", ["VST"])[0]
         self.assertEqual(row["payload"]["period"], "FY2027 Q3")
@@ -92,6 +94,20 @@ class EarningsTests(unittest.TestCase):
         self.assertEqual(row["observed_at"], self.now + 4)
         self.assertEqual(row["available_at"], self.now + 4)
         self.assertEqual(row["payload"]["checked_at"], self.now + 4)
+
+    def test_compact_messages_keep_dates_and_exposure_without_source_links(self):
+        self.service.refresh(["VST"], now=self.now)
+        report = self.service.report(["VST"], now=self.now)
+        notice = self.service.alerts(["VST"], now=self.now)[0][1]
+        briefing = "\n".join(self.service.briefing(["VST"], now=self.now))
+        for message in (report, notice, briefing):
+            self.assertIn("2026-11-06", message)
+            self.assertIn("in 3 days", message)
+            self.assertIn("before-open", message)
+            self.assertNotIn("https://", message)
+            self.assertNotIn("http://", message)
+        self.assertIn("Last checked:", report)
+        self.assertIn("source_url", self.signals.rows("earnings", ["VST"])[0]["payload"])
 
     def test_warning_dedup_survives_restart_lead_edit_and_fallback(self):
         self.service.refresh(["VST"], now=self.now)

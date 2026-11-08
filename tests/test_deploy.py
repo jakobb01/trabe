@@ -49,6 +49,10 @@ if args[0]=='inspect':print('true')
 if args[:2]==['exec','-i']:
  if (p/'fail_backup').exists():sys.exit(1)
  print('pre-deploy-test.sqlite3')
+if args[:3]==['exec','stock-agent','python'] and 'SELECT key,value FROM settings' in args[-1]:
+ count=int((p/'restart_count').read_text())
+ changed=count>1 and (p/'change_preferences').exists()
+ print(('new-settings' if changed else 'settings')+' watchlist trades')
 if args[0]=='build' and (p/'fail_build').exists():sys.exit(1)
 if args[0]=='tag' and args[-1].endswith(':current'):
  (p/'current_image').write_text(args[1])
@@ -212,6 +216,21 @@ print('Captured service diagnostic')
         restore = calls.index("podman run --rm --network=none")
         restart = calls.index("systemctl --user start stock-agent.service")
         self.assertLess(restore, restart)
+        prune = next(line for line in calls.splitlines() if "backup-prune --release" in line)
+        self.assertIn("--env DATABASE_PATH=/data/stock_agent.db", prune)
+        self.assertLess(prune.index("--env-file"), prune.index("--env DATABASE_PATH="))
+
+    def test_restart_difference_reports_the_changed_category_without_user_values(self):
+        self.old_deployment()
+        (self.path / "change_preferences").touch()
+        result = self.run_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("restart persistence comparison", result.stderr)
+        self.assertIn("saved preferences changed", result.stderr)
+        self.assertNotIn("watchlist changed", result.stderr)
+        self.assertNotIn("recorded trades changed", result.stderr)
+        self.assertNotIn("NEW_CREDENTIALS", result.stderr)
+        self.assertNotIn("Deployment verified", result.stdout)
 
     def test_bundled_generator_install_is_app_scoped(self):
         tools = self.source / "deploy/tools"

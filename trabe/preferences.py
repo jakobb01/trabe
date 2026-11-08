@@ -7,6 +7,12 @@ DEFAULTS = {
     "earnings_enabled": "off",
     "insiders_enabled": "off",
     "news_enabled": "off",
+    "news_sources": "finnhub,yahoo",
+    "news_second_view": "on",
+    "massive_daily_budget": "200",
+    "marketaux_daily_budget": "80",
+    "snapshot_enabled": "off",
+    "snapshot_time": "preopen-30m",
     "briefing_enabled": "off",
     "briefing_time": "08:00",
     "earnings_warning_days": "5",
@@ -29,6 +35,12 @@ DESCRIPTIONS = {
     "earnings_enabled": "Automatic earnings checks and warnings: on or off",
     "insiders_enabled": "Automatic qualifying insider purchase alerts: on or off",
     "news_enabled": "Background company-news collection: on or off",
+    "news_sources": "Comma-separated sources: finnhub,yahoo,massive,marketaux; extra keys required",
+    "news_second_view": "Show matched-story vendor sentiment cross-checks: on or off",
+    "massive_daily_budget": "Maximum Massive request attempts per UTC day, 1–1000",
+    "marketaux_daily_budget": "Maximum Marketaux request attempts per UTC day, 1–80",
+    "snapshot_enabled": "Silent daily decision snapshots and news preparation: on or off",
+    "snapshot_time": "Decision snapshot: preopen-30m or HH:MM in your timezone",
     "briefing_enabled": "Combined trading-day morning briefing: on or off",
     "briefing_time": "Briefing time in your timezone, HH:MM",
     "earnings_warning_days": "Warn once within 1–14 calendar days before earnings",
@@ -65,11 +77,23 @@ def validate_setting(key: str, value: str) -> str:
     elif key == "market_provider":
         if value not in ("alphavantage", "finnhub"):
             raise ValueError("Provider must be alphavantage or finnhub.")
+    elif key == "news_sources":
+        selected = value.lower().split(",")
+        if not selected or any(
+            s not in {"finnhub", "yahoo", "massive", "marketaux"} for s in selected
+        ):
+            raise ValueError("Use comma-separated finnhub,yahoo,massive,marketaux.")
+        value = ",".join(dict.fromkeys(selected))
+    elif key == "snapshot_time":
+        if value != "preopen-30m" and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("Use preopen-30m or a local 24-hour time such as 08:00.")
     elif key in (
         "monitoring",
         "earnings_enabled",
         "insiders_enabled",
         "news_enabled",
+        "news_second_view",
+        "snapshot_enabled",
         "briefing_enabled",
     ):
         if value not in ("on", "off"):
@@ -86,11 +110,19 @@ def validate_setting(key: str, value: str) -> str:
         ) <= Decimal(1000000000):
             raise ValueError("Insider minimum must be 1000–1000000000 USD.")
         value = str(Decimal(value))
-    elif key in ("max_source_age_seconds", "baseline_max_gap_percent", "finnhub_daily_budget"):
+    elif key in (
+        "max_source_age_seconds",
+        "baseline_max_gap_percent",
+        "finnhub_daily_budget",
+        "massive_daily_budget",
+        "marketaux_daily_budget",
+    ):
         low, high = {
             "max_source_age_seconds": (30, 600),
             "baseline_max_gap_percent": (10, 50),
             "finnhub_daily_budget": (100, 10000),
+            "massive_daily_budget": (1, 1000),
+            "marketaux_daily_budget": (1, 80),
         }[key]
         if not value.isascii() or not value.isdecimal() or not low <= int(value) <= high:
             raise ValueError(f"{key} must be an integer from {low} to {high}.")

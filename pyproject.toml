@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trabe"
-version = "0.7.0"
+version = "0.8.6"
 description = "Telegram-controlled stock watcher for a Raspberry Pi"
 requires-python = ">=3.11"
 dependencies = ["websocket-client==1.9.2"]

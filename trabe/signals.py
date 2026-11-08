@@ -7,8 +7,9 @@ import os
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
+from trabe import __version__
 from trabe.api import ApiError
 
 SIGNAL_SCHEMA = (
@@ -36,6 +37,11 @@ SIGNAL_SCHEMA = (
 
 class WorkStopped(ValueError):
     """Cooperative pause/shutdown: never reinterpret this as a provider failure."""
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class SignalStore:
@@ -204,27 +210,44 @@ class SignalStore:
 class SignalHTTP:
     """Shares price-provider limits without coupling signals to /monitor on."""
 
-    def __init__(self, config, store, *, stop=None, automatic=False, feature=None, opener=urlopen):
+    def __init__(
+        self,
+        config,
+        store,
+        *,
+        stop=None,
+        automatic=False,
+        feature=None,
+        opener=urlopen,
+        deadline=None,
+        guard_settings=None,
+    ):
         self.config, self.store, self.stop = config, store, stop
         self.automatic, self.feature, self.opener = automatic, feature, opener
+        self.deadline, self.guard_settings = deadline, guard_settings or {}
 
     def guard(self):
         if self.stop is not None and self.stop.is_set():
             raise WorkStopped("Background work stopped.")
         if self.automatic:
             settings = self.store.settings()
+            if self.deadline is not None and time.time() >= self.deadline:
+                raise WorkStopped("Automatic refresh deadline passed.")
+            if any(settings.get(k) != v for k, v in self.guard_settings.items()):
+                raise WorkStopped("Automatic refresh settings changed.")
             if self.store.automation_paused() or self.store.state("storage_paused"):
                 raise WorkStopped("Signal automation paused.")
             if self.feature and settings.get(self.feature + "_enabled") != "on":
                 raise WorkStopped("Signal automation disabled.")
 
-    def _read(self, url, *, headers=None, maximum=2_000_000):
+    def _read(self, url, *, headers=None, maximum=2_000_000, opener=None):
         self.guard()
         request = Request(
-            url, headers={"User-Agent": "trabe/0.7 (financial-watchlist)", **(headers or {})}
+            url,
+            headers={"User-Agent": f"trabe/{__version__} (financial-watchlist)", **(headers or {})},
         )
         try:
-            with self.opener(request, timeout=12) as response:
+            with (opener or self.opener)(request, timeout=12) as response:
                 raw = response.read(maximum + 1)
             if len(raw) > maximum:
                 raise ApiError("Signal response exceeds its size limit.")
@@ -295,7 +318,87 @@ class SignalHTTP:
                 time.sleep(delay)
         self.guard()
 
+    def news_api(self, provider, **params):
+        """One bounded page; no authenticated redirects or arbitrary next_url fetches."""
+        if provider not in {"massive", "marketaux"}:
+            raise ValueError("Unknown news API.")
+        key = getattr(self.config, provider + "_key", "")
+        if not key:
+            raise ApiError("News API key is not configured.", 401)
+        descriptor = os.open(
+            str(self.store.path) + f".{provider}.lock", os.O_CREAT | os.O_RDWR, 0o600
+        )
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            self.guard()
+            now = time.time()
+            if float(self.store.state(provider + "_retry_after", "0")) > now:
+                raise ApiError("News API cooldown is active.", 429, 60)
+            state_key = None
+            if provider == "marketaux":
+                state_key = "marketaux_checks_" + params.get("symbols", "")
+                count = json.loads(self.store.state(state_key, "{}"))
+                day = self.store.today()
+                used = count.get("count", 0) if count.get("day") == day else 0
+                if used >= 6:
+                    raise ApiError("News request budget deferred.", 429, 3600)
+            budget = int(self.store.settings()[provider + "_daily_budget"])
+            if self.store.provider_usage(provider) >= budget:
+                raise ApiError("News request budget deferred.", 429, 3600)
+            self._pace(provider + "_request_finished", 15.1 if provider == "massive" else 2.1)
+            if self.automatic and provider not in self.store.settings()["news_sources"].split(","):
+                raise WorkStopped("News source disabled during automatic work.")
+            try:
+                self.store.reserve_provider(
+                    provider,
+                    budget,
+                    per_minute=4 if provider == "massive" else 30,
+                )
+            except ValueError:
+                raise ApiError("News request budget deferred.", 429, 60) from None
+            if state_key is not None:
+                self.store.set_state(state_key, json.dumps({"day": day, "count": used + 1}))
+            if provider == "massive":
+                url = "https://api.massive.com/v2/reference/news?" + urlencode(params)
+                headers = {"Authorization": "Bearer " + key}
+            else:
+                url = "https://api.marketaux.com/v1/news/all?" + urlencode(
+                    params | {"api_token": key}
+                )
+                headers = {}
+            try:
+                opener = build_opener(NoRedirect()).open if self.opener is urlopen else self.opener
+                result = self._json(self._read(url, headers=headers, opener=opener))
+                if not isinstance(result, dict) or result.get("status") in {
+                    "ERROR",
+                    "NOT_AUTHORIZED",
+                }:
+                    raise ApiError("News API response is unavailable.")
+                return result
+            except ApiError as error:
+                if error.code in {401, 403, 429}:
+                    self.store.set_state(
+                        provider + "_retry_after",
+                        str(
+                            time.time()
+                            + max(3600 if error.code in {401, 403} else 60, error.retry_after)
+                        ),
+                    )
+                raise
+            finally:
+                self.store.set_state(provider + "_request_finished", str(time.time()))
+        finally:
+            os.close(descriptor)
+
     def alpha_csv(self, function, **params):
+        return self._alpha(function, params, json_response=False, ttl=86400)
+
+    def alpha_json(self, function, **params):
+        if function not in {"EARNINGS", "INCOME_STATEMENT"}:
+            raise ValueError("Unsupported Alpha Vantage fundamentals endpoint.")
+        return self._json(self._alpha(function, params, json_response=True, ttl=3600))
+
+    def _alpha(self, function, params, *, json_response, ttl):
         if not self.config.api_key:
             raise ApiError("Alpha Vantage key is not configured.", 401)
         key = function + "?" + urlencode(sorted(params.items()))
@@ -308,7 +411,8 @@ class SignalHTTP:
                     "SELECT payload,fetched_at FROM signal_http_cache WHERE provider='alphavantage' AND cache_key=?",
                     (key,),
                 ).fetchone()
-            if cached and 0 <= time.time() - cached[1] < 86400:
+            if cached and 0 <= time.time() - cached[1] < ttl:
+                self.alpha_checked_at = cached[1]
                 return cached[0]
             if float(self.store.state("market_retry_after", "0")) > time.time():
                 raise ApiError("Alpha Vantage cooldown is active.", 429, 60)
@@ -337,13 +441,35 @@ class SignalHTTP:
                         word in notice
                         for word in ("limit", "frequency", "requests per", "spreading out")
                     )
-                    raise ApiError(
-                        "Alpha Vantage calendar request allowance reached."
-                        if limited
-                        else "Alpha Vantage denied calendar access.",
-                        429 if limited else 403,
-                        60,
+                    if notice:
+                        raise ApiError(
+                            "Alpha Vantage request allowance reached."
+                            if limited
+                            else "Alpha Vantage denied endpoint access.",
+                            429 if limited else 403,
+                            60,
+                        )
+                    if not json_response:
+                        raise ApiError("Alpha Vantage denied calendar access.", 403)
+                    rows_key = "quarterlyEarnings" if function == "EARNINGS" else "quarterlyReports"
+                    if not isinstance(data, dict) or not isinstance(data.get(rows_key), list):
+                        raise ApiError("Alpha Vantage returned invalid fundamentals JSON.")
+                    fields = (
+                        ("fiscalDateEnding", "reportedDate", "reportedEPS", "estimatedEPS")
+                        if function == "EARNINGS"
+                        else ("fiscalDateEnding", "reportedCurrency", "totalRevenue")
                     )
+                    data = {
+                        "symbol": data.get("symbol"),
+                        rows_key: [
+                            {field: row.get(field) for field in fields}
+                            for row in data[rows_key][:8]
+                            if isinstance(row, dict)
+                        ],
+                    }
+                    value = json.dumps(data, allow_nan=False)
+                elif json_response:
+                    raise ApiError("Alpha Vantage returned invalid fundamentals JSON.")
                 if function == "EARNINGS_CALENDAR" and not {"symbol", "reportDate"}.issubset(
                     {v.strip().strip('"') for v in value.splitlines()[0].split(",")}
                     if value.splitlines()
@@ -361,9 +487,10 @@ class SignalHTTP:
             finally:
                 self.store.set_state("market_request_finished", str(time.time()))
             with self.store.connection() as db:
+                self.alpha_checked_at = time.time()
                 db.execute(
                     "INSERT OR REPLACE INTO signal_http_cache VALUES ('alphavantage',?,?,?)",
-                    (key, value, time.time()),
+                    (key, value, self.alpha_checked_at),
                 )
             return value
         finally:
@@ -374,6 +501,7 @@ class SignalHTTP:
         allowed = {
             "tracefour": {"tracefour.com"},
             "yahoo": {"feeds.finance.yahoo.com", "finance.yahoo.com"},
+            "yahoo-chart": {"query1.finance.yahoo.com"},
             "sec": {"www.sec.gov", "data.sec.gov"},
         }
         if (
@@ -384,32 +512,68 @@ class SignalHTTP:
             or parsed.port not in (None, 443)
         ):
             raise ValueError("Unapproved public feed URL.")
+        market_chart = provider == "yahoo-chart"
+        shared_provider = "yahoo" if market_chart else provider
         descriptor = os.open(
-            str(self.store.path) + f".{provider}.lock", os.O_CREAT | os.O_RDWR, 0o600
+            str(self.store.path) + f".{shared_provider}.lock", os.O_CREAT | os.O_RDWR, 0o600
         )
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             self.guard()
             now = time.time()
-            if float(self.store.state(provider + "_retry_after", "0")) > now:
+            if (
+                max(
+                    float(self.store.state(shared_provider + "_retry_after", "0")),
+                    float(self.store.state(provider + "_retry_after", "0")),
+                )
+                > now
+            ):
                 raise ApiError("Public feed cooldown is active.", 429, 60)
+            if market_chart:
+                self._pace("yahoo_chart_request_finished", 1.1)
+                self.guard()
+                now = time.time()
             with self.store.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
                 db.execute("DELETE FROM signal_http_calls WHERE requested_at<?", (now - 3600,))
                 count = db.execute(
-                    "SELECT COUNT(*) FROM signal_http_calls WHERE provider=?", (provider,)
+                    "SELECT COUNT(*) FROM signal_http_calls WHERE provider IN (?,?)",
+                    (
+                        shared_provider,
+                        "yahoo-chart" if shared_provider == "yahoo" else shared_provider,
+                    ),
                 ).fetchone()[0]
                 if count >= (40 if provider == "tracefour" else 120):
                     raise ApiError("Public feed hourly allowance reached.", 429, 3600)
+                if (
+                    market_chart
+                    and db.execute(
+                        "SELECT COUNT(*) FROM signal_http_calls WHERE provider='yahoo-chart'"
+                    ).fetchone()[0]
+                    >= 60
+                ):
+                    raise ApiError(
+                        "Market chart hourly allowance reached; news headroom reserved.", 429, 3600
+                    )
                 db.execute("INSERT INTO signal_http_calls VALUES (?,?)", (provider, now))
             try:
-                return self._read(url, maximum=2_000_000)
+                opener = (
+                    build_opener(NoRedirect()).open
+                    if market_chart and self.opener is urlopen
+                    else self.opener
+                )
+                return self._read(url, maximum=2_000_000, opener=opener)
             except ApiError as error:
                 if error.code == 429:
                     self.store.set_state(
-                        provider + "_retry_after", str(now + max(60, error.retry_after))
+                        shared_provider + "_retry_after", str(now + max(60, error.retry_after))
                     )
+                elif market_chart and error.code in (401, 403):
+                    self.store.set_state("yahoo-chart_retry_after", str(now + 3600))
                 raise
+            finally:
+                if market_chart:
+                    self.store.set_state("yahoo_chart_request_finished", str(time.time()))
         finally:
             os.close(descriptor)
 

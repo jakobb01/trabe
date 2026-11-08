@@ -248,12 +248,17 @@ class AgentTests(unittest.TestCase):
 
     def test_credentials_are_atomic_private_and_loadable(self):
         env = self.path / ".env"
-        write_credentials(env, TOKEN, 123, "key")
+        write_credentials(
+            env, TOKEN, 123, "key", massive_key="massive-fixture", marketaux_key="marketaux-fixture"
+        )
         self.assertEqual(env.stat().st_mode & 0o777, 0o600)
         with patch.dict(os.environ, {}, clear=True):
             loaded = Config.load(env)
         self.assertEqual(loaded.owner_id, 123)
         self.assertEqual(loaded.token, TOKEN)
+        self.assertEqual(loaded.massive_key, "massive-fixture")
+        self.assertEqual(loaded.marketaux_key, "marketaux-fixture")
+        self.assertNotIn("massive-fixture", repr(loaded))
         self.assertEqual(list(self.path.glob(".env-setup-*")), [])
 
     def test_missing_owner_and_group_chat_are_rejected(self):

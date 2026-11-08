@@ -12,6 +12,17 @@ Run `python3 -m trabe setup` to create and pair a private `.env`. Daily
 preferences and the watchlist are managed in Telegram. To change bot/account or
 rotate credentials, update `.env`, re-pair where appropriate, and redeploy.
 
+## News and snapshot upgrade (0.8)
+
+For the current news/snapshot upgrade, use the
+[0.8 release walkthrough](release-0.8.md). Save `MASSIVE_API_KEY` privately in
+`.env` before deploying; the bundle now includes it and optional
+`MARKETAUX_API_KEY`. Runtime source settings remain in Telegram. Schema 5 → 6
+imports bounded legacy news inputs at migration time; 6 → 7 adds immutable
+decision packets. The normal pre-deploy database backup is required for rollback
+to a release that only understands schema 5. No additional runtime dependency,
+listener or container port is introduced.
+
 ## Position upgrade (0.4)
 
 SQLite schema 4 adds the transaction ledger, FX cache and portfolio snapshots;
@@ -265,7 +276,9 @@ volume during an update.
 
 Automatic backups are pruned to three retained snapshots plus one protected while
 deployment/rollback is active, and expire after three calendar months. Maintenance
-shares the protection lock with deployment. Manual snapshots are not pruned.
+shares the protection lock with deployment. Manually created database backups
+are not pruned by that backup policy. `/snapshot now` creates a decision record,
+which instead expires after seven days or the 32-record manual cap.
 Session rollup runs at close plus ten minutes and deletes minute detail atomically;
 retention catches up after downtime or restoration even when monitoring is off.
 
@@ -275,6 +288,13 @@ Network calls have timeouts; polling backs off and respects HTTP 429 retry delay
 Liveness is separate from upstream connectivity, so a temporary Telegram outage
 does not cause repeated restart notices. Deployment readiness additionally requires
 a recent successful poll. Startup notifications are sent once per app version.
+
+Keep preferences, watchlist and recorded trades unchanged until the installer
+prints `Deployment verified`: it compares those records across its restart.
+Read-only bot commands remain available. A changed fingerprint fails verification
+and rolls back; failure output now names the stage and changed data category
+without exposing saved values. Rollback backup cleanup explicitly uses the
+container's `/data/stock_agent.db`, overriding the local path in the credentials file.
 
 Replies are persisted before delivery, split by Telegram's UTF-16 length limits,
 and paced. Successful chunks are acknowledged individually. Pending replies survive

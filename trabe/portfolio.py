@@ -17,20 +17,29 @@ class Portfolio:
         self.ledger = Ledger(store)
         self.fx = FX(store)
 
-    def calculate(self, ticker=None, now=None):
+    def calculate(self, ticker=None, now=None, db=None):
         now = time.time() if now is None else now
-        settings = self.store.settings()
+        settings = self.store.settings(db)
         currency = settings["default_currency"]
-        positions = self.ledger.positions(currency)
-        fx = self.fx.current(now)
+        positions = self.ledger.positions(currency, db)
+        fx = self.fx.current(now, db)
         rows = []
         for name, (quantity, basis, realized) in sorted(positions.items()):
             if ticker and name != ticker:
                 continue
             if quantity == 0 and not ticker:
                 continue
-            quote = self.monitor.latest(name) if self.monitor else None
-            quote = quote or self.store.cached_live("finnhub", name)
+            quote = self.monitor.latest(name) if self.monitor and db is None else None
+            quote = quote or self.store.cached_live("finnhub", name, db)
+            if (
+                db is not None
+                and quote
+                and (
+                    quote.get("received_at", now + 1) > now
+                    or quote.get("source_time", now + 1) > now
+                )
+            ):
+                quote = None
             converted = value = profit = None
             if quantity == 0:
                 value = Decimal(0)

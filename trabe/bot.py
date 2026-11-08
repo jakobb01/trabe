@@ -15,14 +15,16 @@ from trabe.ledger import Ledger
 from trabe.portfolio import Portfolio
 from trabe.preferences import DESCRIPTIONS
 from trabe.scans import Scans
+from trabe.snapshots import SnapshotService
 from trabe.store import Store
 
 logger = logging.getLogger(__name__)
 
 COMMANDS = [
-    ("earnings", "Upcoming reports and earnings warnings"),
+    ("earnings", "Estimates, quarterly history and result updates"),
     ("insiders", "Qualifying insider purchases and filing sources"),
-    ("news", "Cached company news and labelled sentiment"),
+    ("news", "Refresh company news and labelled sentiment"),
+    ("snapshot", "Save or inspect immutable daily decision inputs"),
     ("briefing", "Daily digest: now, HH:MM, on or off"),
     ("menu", "Open the control menu"),
     ("help", "Show available commands"),
@@ -96,9 +98,10 @@ BUTTONS = {
 }
 
 HELP = """trabe
-/earnings [TICKER|on|off|refresh] — upcoming reports and warnings
-/insiders [TICKER|on|off|refresh] — qualified purchases and filing links
-/news [TICKER|on|off|refresh] — summaries, source links and local sentiment
+/earnings [TICKER|cached [TICKER]|refresh [TICKER]|on|off] — earnings and results
+/insiders [TICKER|cached [TICKER]|refresh [TICKER]|on|off] — purchases
+/news [TICKER|cached [TICKER]|refresh [TICKER]|on|off|sources] — company news
+/snapshot [latest|now|YYYY-MM-DD|on|off] — frozen decision inputs
 /briefing now|HH:MM|on|off — combined trading-day digest
 /set earnings_warning_days 5
 /set insider_min_value_usd 10000
@@ -217,6 +220,8 @@ class Bot:
             self.telegram.send(self.config.owner_id, reply)
 
     def command(self, command: str, args: list[str]) -> str:
+        if command == "snapshot":
+            return SnapshotService(self.store).handle(args)
         signal_reply = self.insights.handle(command, args)
         if signal_reply is not None:
             return self.insights.bounded(signal_reply)
@@ -245,6 +250,8 @@ class Bot:
                 + self.controls.status()
                 + "\n"
                 + self.insights.status()
+                + "\n"
+                + SnapshotService(self.store).status()
             )
         if command == "watchlist":
             stocks = self.store.watchlist()
@@ -487,6 +494,8 @@ class Bot:
             if len(args) != 2:
                 raise ValueError("Usage: /set NAME VALUE. Use /settings to see available names.")
             key, value = args
+            if key == "snapshot_enabled":
+                return SnapshotService(self.store).handle([value])
             if key in ("earnings_enabled", "insiders_enabled", "news_enabled", "briefing_enabled"):
                 return self.insights.handle(key.removesuffix("_enabled"), [value])
             if key == "briefing_time":

@@ -3,7 +3,7 @@
 import copy
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from trabe.api import ApiError
@@ -89,6 +89,138 @@ class InsiderTests(unittest.TestCase):
         self.assertIn("open-market/private", report)
         self.assertIn("Tracefour (CC BY 4.0)", report)
         self.assertIn(self.raw["rawFilingUrl"], report)
+        self.assertIn("Value: 100,000.00 USD", report)
+        self.assertIn("1,000 shares × 100.0000 USD", report)
+        self.assertIn("✅ Qualified", report)
+        self.assertIn("Traded: 2026-11-03", report)
+        self.assertIn("Filed:", report)
+
+    def test_capped_verification_feed_reports_partial_coverage_and_clears(self):
+        self.finnhub_rows = [self.match] * 100
+        self.feature.refresh(["VST"], now=self.now)
+        self.assertIn(
+            "verification coverage may be incomplete", self.feature.report(["VST"], now=self.now)
+        )
+        self.finnhub_rows = [self.match]
+        self.feature.refresh(["VST"], now=self.now + 1, force=True)
+        self.assertNotIn(
+            "verification coverage may be incomplete",
+            self.feature.report(["VST"], now=self.now + 1),
+        )
+
+    def test_purchase_after_first_hundred_transactions_is_kept_and_verified(self):
+        self.finnhub_rows = [
+            self.match | {"name": f"Other {i}", "transactionCode": "S"} for i in range(100)
+        ] + [self.match]
+        self.feature.refresh(["VST"], now=self.now)
+        row = self.repo.rows("insiders", ["VST"])[0]
+        self.assertEqual(row["payload"]["eligibility_errors"], [])
+        self.assertEqual(self.repo.get("insider-coverage", "VST")["payload"]["transactions"], 101)
+        self.assertLessEqual(len([c for c in self.http.calls if c[0] == "finnhub"]), 7)
+
+    def test_crowded_ranges_split_without_losing_older_transactions_or_duplicates(self):
+        today = datetime.fromtimestamp(self.now, UTC).date()
+        rows = [
+            self.match
+            | {
+                "name": f"Owner {i}",
+                "transactionDate": (today - timedelta(days=i // 2)).isoformat(),
+            }
+            for i in range(150)
+        ]
+
+        def fetch(endpoint, **params):
+            start, end = date.fromisoformat(params["from"]), date.fromisoformat(params["to"])
+            return {
+                "data": [
+                    r for r in rows if start <= date.fromisoformat(r["transactionDate"]) <= end
+                ][:100]
+            }
+
+        self.http.finnhub = fetch
+        candidates, partial, requests = self.feature._transactions("VST", today)
+        self.assertEqual(len(candidates), 150)
+        self.assertFalse(partial)
+        self.assertEqual(requests, 3)
+
+    def test_healthy_empty_feeds_show_checked_purchase_coverage(self):
+        self.trace_rows = self.finnhub_rows = []
+        self.feature.refresh(["VST"], now=self.now)
+        report = self.feature.report(["VST"], now=self.now)
+        self.assertIn("0 purchase rows", report)
+        self.assertIn("0 P transactions / 0 total", report)
+        self.assertNotIn("Coverage may be unavailable", report)
+
+    def test_primary_purchase_after_first_hundred_is_retained_and_can_alert(self):
+        self.trace_rows = [
+            self.raw
+            | {
+                "filingId": f"0001234567-26-{i:06d}-0",
+                "filedAt": datetime.fromtimestamp(self.now - 60 - i, UTC).isoformat(),
+            }
+            for i in range(1, 102)
+        ]
+        self.finnhub_rows = [self.match | {"id": "0001234567-26-000101"}]
+        self.feature.refresh(["VST"], now=self.now)
+        self.assertEqual(len(self.repo.rows("insiders", ["VST"], limit=1000)), 101)
+        last = self.repo.get("insiders", "VST:0001234567-26-000101-0")
+        self.assertEqual(last["payload"]["eligibility_errors"], [])
+        self.assertEqual(len(self.feature.alerts(["VST"], now=self.now)), 1)
+
+    def test_primary_retention_stays_bounded_and_reports_unusable_rows(self):
+        self.trace_rows = [
+            self.raw | {"filingId": f"0001234567-26-{i:06d}-0"} for i in range(1, 502)
+        ]
+        self.feature.refresh(["VST"], now=self.now)
+        self.assertEqual(len(self.repo.rows("insiders", ["VST"], limit=1000)), 500)
+        self.assertIn("500-row cap", self.feature.report(["VST"], now=self.now))
+        self.trace_rows = [self.raw, self.raw | {"shares": -1}]
+        self.feature.refresh(["VST"], now=self.now + 1, force=True)
+        self.assertIn("Unusable filing rows: 1", self.feature.report(["VST"], now=self.now + 1))
+
+    def test_source_failure_preserves_each_sources_counts_and_checked_time(self):
+        self.feature.refresh(["VST"], now=self.now)
+
+        def offline(*args, **kwargs):
+            raise OSError("private provider details")
+
+        self.http.json = offline
+        later = self.now + 13 * 3600
+        self.feature.refresh(["VST"], now=later, force=True)
+        detail = self.repo.get("insider-coverage", "VST")["payload"]
+        self.assertEqual(detail["trace_purchases"], 1)
+        self.assertEqual(detail["trace_checked_at"], self.now)
+        self.assertEqual(detail["checked_at"], later)
+        report = self.feature.report(["VST"], now=later)
+        self.assertIn("Tracefour: 1 purchase rows", report)
+        self.assertIn("03 Nov 23:00 UTC • stale coverage", report)
+        self.assertIn("Finnhub: 1 P transactions / 1 total", report)
+        self.assertNotIn("private provider details", report)
+
+        self.http.json = lambda *args, **kwargs: {"data": [self.raw]}
+        self.http.finnhub = offline
+        self.feature.refresh(["VST"], now=later + 10, force=True)
+        detail = self.repo.get("insider-coverage", "VST")["payload"]
+        self.assertEqual(detail["trace_checked_at"], later + 10)
+        self.assertEqual(detail["checked_at"], later)
+        self.assertIn(
+            "non-derivative eligibility not verified", self.feature.report(["VST"], now=later + 10)
+        )
+
+    def test_filing_receipt_time_is_not_advanced_by_verification(self):
+        def verify(*args, **kwargs):
+            self.http.received_at = self.now + 10
+            return {"data": [self.match]}
+
+        self.http.received_at = self.now
+        self.http.finnhub = verify
+        self.feature.refresh(["VST"], now=self.now)
+        detail = self.repo.get("insider-coverage", "VST")["payload"]
+        self.assertEqual(detail["trace_checked_at"], self.now)
+        self.assertEqual(detail["checked_at"], self.now + 10)
+        row = self.repo.rows("insiders", ["VST"])[0]
+        self.assertEqual(row["payload"]["source_fetched_at"], self.now)
+        self.assertEqual(row["observed_at"], self.now + 10)
 
     def test_request_receipt_time_accepts_a_genuinely_just_filed_record(self):
         self.http.received_at = self.now + 10

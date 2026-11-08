@@ -126,3 +126,26 @@ soak, real chat messages or broad suite rerun is needed for this research.
 - All-symbol Finnhub responses observed here were incomplete/truncated.
 - Source disagreements must be visible; a fallback is not independent confirmation.
 - Freshness of earnings schedules is separate from freshness of stock prices.
+
+## 0.7.2 follow-up: expectations and reported results
+
+On 2026-11-04 the existing key returned four rows for both VST and GOOGL from
+`/stock/earnings?limit=4`. These contain fiscal year/quarter, period end, EPS actual
+and estimate. The VST calendar also supplied upcoming EPS and revenue estimates.
+Private responses are in `.local/earnings-results-probe/`; three calls were made,
+with no Telegram activity.
+
+Use the provider's paired EPS actual/estimate for historical grading. The
+[official EPS model](https://github.com/Finnhub-Stock-API/finnhub-go/blob/master/docs/EarningResult.md)
+has no revenue fields; the
+[calendar model](https://github.com/Finnhub-Stock-API/finnhub-go/blob/master/docs/EarningRelease.md)
+has EPS/revenue estimates and actuals, all optional. Calendar revenue estimates
+can include proprietary estimates. Do not invent analyst coverage, currency,
+publication timestamps or GAAP/adjusted reconciliation.
+
+Implementation keeps a bounded latest-four cache, matches fiscal identity,
+accelerates pending releases to five-minute checks and claims new result metrics
+through the existing durable outbox. EPS/history observations use their own
+estimates rather than mixing endpoint bases. EPS and revenue can notify
+separately as data appears; initial historical seeding never sends a backlog.
+See [the release contract](release-0.7.2.md) for exact windows and limitations.

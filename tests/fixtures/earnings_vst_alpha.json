@@ -1,0 +1,63 @@
+{
+  "symbol": "VST",
+  "quarterlyEarnings": [
+    {
+      "fiscalDateEnding": "2026-09-30",
+      "reportedDate": "2026-11-06",
+      "reportedEPS": "1.75",
+      "estimatedEPS": "2.94",
+      "surprise": "-1.19",
+      "surprisePercentage": "-40.4762",
+      "reportTime": "pre-market"
+    },
+    {
+      "fiscalDateEnding": "2026-06-30",
+      "reportedDate": "2026-08-07",
+      "reportedEPS": "1.8",
+      "estimatedEPS": "1.54",
+      "surprise": "0.26",
+      "surprisePercentage": "16.8831",
+      "reportTime": "pre-market"
+    },
+    {
+      "fiscalDateEnding": "2026-03-31",
+      "reportedDate": "2026-05-07",
+      "reportedEPS": "2.87",
+      "estimatedEPS": "2.21",
+      "surprise": "0.66",
+      "surprisePercentage": "29.8643",
+      "reportTime": "pre-market"
+    },
+    {
+      "fiscalDateEnding": "2025-12-31",
+      "reportedDate": "2026-02-26",
+      "reportedEPS": "2.18",
+      "estimatedEPS": "2.51",
+      "surprise": "-0.33",
+      "surprisePercentage": "-13.1474",
+      "reportTime": "pre-market"
+    }
+  ],
+  "quarterlyReports": [
+    {
+      "fiscalDateEnding": "2026-09-30",
+      "reportedCurrency": "None",
+      "totalRevenue": "6347000000"
+    },
+    {
+      "fiscalDateEnding": "2026-06-30",
+      "reportedCurrency": "USD",
+      "totalRevenue": "4017000000"
+    },
+    {
+      "fiscalDateEnding": "2026-03-31",
+      "reportedCurrency": "USD",
+      "totalRevenue": "5640000000"
+    },
+    {
+      "fiscalDateEnding": "2025-12-31",
+      "reportedCurrency": "USD",
+      "totalRevenue": "4584000000"
+    }
+  ]
+}

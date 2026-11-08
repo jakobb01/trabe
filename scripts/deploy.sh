@@ -21,7 +21,8 @@ try:
     config = Config.load()
     if not config.api_key and not config.finnhub_key:
         raise ValueError('Configure a market provider key before deployment.')
-    write_credentials(Path(sys.argv[1]), config.token, config.owner_id, config.api_key, config.finnhub_key)
+    write_credentials(Path(sys.argv[1]), config.token, config.owner_id, config.api_key,
+                      config.finnhub_key, config.massive_key, config.marketaux_key)
 except ValueError as error:
     raise SystemExit(str(error)) from None
 PY

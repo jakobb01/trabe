@@ -164,10 +164,15 @@ class Maintenance:
         return True
 
     def expire(self, now: float):
+        from trabe.news_store import NewsStore
+        from trabe.snapshots import SnapshotStore
+
         cutoff = retention_cutoff(datetime.fromtimestamp(now, NY).date())
         end = datetime.combine(cutoff + timedelta(days=1), datetime.min.time(), NY).timestamp()
         with self.store.connection() as db:
             db.execute("BEGIN IMMEDIATE")
+            NewsStore(self.store).prune(now, db)
+            SnapshotStore(self.store).prune(now, db)
             for table, column in (
                 ("minute_observations", "session_date"),
                 ("daily_summaries", "session_date"),
@@ -198,6 +203,23 @@ class Maintenance:
                 "DELETE FROM state WHERE key LIKE 'news_health_%' AND json_extract(value,'$.checked_at')<?",
                 (end,),
             )
+            for prefix, field in (
+                ("news_context_", "checked_at"),
+                ("news_view_", "as_of"),
+                ("news_source_", "checked_at"),
+            ):
+                db.execute(
+                    "DELETE FROM state WHERE key LIKE ? AND json_extract(value,?)<?",
+                    (prefix + "%", "$." + field, end),
+                )
+            db.execute(
+                "DELETE FROM state WHERE key LIKE 'news_retention_%' AND CAST(value AS REAL)<?",
+                (end,),
+            )
+            db.execute(
+                "DELETE FROM state WHERE key LIKE 'marketaux_checks_%' AND json_extract(value,'$.day')<=?",
+                (str(cutoff),),
+            )
             db.execute(
                 "DELETE FROM state WHERE key LIKE 'earnings_status_%' AND substr(key,17) NOT IN (SELECT symbol FROM signal_sources WHERE kind='earnings')"
             )
@@ -217,7 +239,11 @@ class Maintenance:
                 ("news", 1000),
                 ("news_daily", 4500),
                 ("insiders", 5000),
+                ("insider-coverage", 1000),
+                ("market-context", 1000),
+                ("market-news", 1),
                 ("earnings", 2000),
+                ("earnings-history", 1000),
                 ("briefing", 100),
             ):
                 db.execute(

@@ -1,5 +1,41 @@
 # Validation
 
+## 0.7.2 earnings expectations and results (2026-11-04)
+
+41 focused earnings, result, shared-signal and presentation tests passed in 0.974
+seconds. Cases cover upcoming EPS/revenue, four-quarter fiscal identity, HIT/MET/MISS,
+negative/zero/missing values, pending releases, five-minute polling bounds,
+historical seeding, independently arriving metrics, persisted combined/partial
+claims, activation/resume and retained data during source failures. Existing
+calendar revision, owner, pause and atomic delivery cases passed in that run.
+
+Three direct Finnhub probes returned HTTP 200: VST/GOOGL latest-four EPS history
+and VST's calendar. The VST response included EPS 2.991 and revenue 6,084,287,722
+expected for its next release. Saved responses were replayed through the production
+earnings adapter with a temporary database: four history rows and expected figures
+rendered, no source URLs appeared, and zero messages were enqueued. Private evidence
+and the rendered preview stay in ignored `.local/earnings-results-probe/`.
+
+Ruff lint/format and diff checks passed. Runtime dependencies and schema remain
+unchanged. No image/ARM/soak or broad integration suite, deployment, real bot poller
+or Telegram message was used. See [the 0.7.2 release contract](release-0.7.2.md).
+
+## 0.7.1 message presentation (2026-11-04)
+
+59 focused news, presentation, shared-signal and existing command/delivery tests
+passed in 3.129 seconds. They cover compact bullish/neutral/bearish reports,
+retained provenance, missing-data handling, literal provider text, Unicode entity
+offsets, chunk limits, keyboard preservation and persisted outbox retries.
+Ruff lint/format checks passed for changed Python files. No live Telegram
+messages/poller, deployment, image build or broad integration suite was used.
+See [message examples and scope](messages.md).
+
+The follow-up presentation review passed 46 focused news, earnings, insiders and
+formatting cases in 0.698 seconds. Signed news bias appears in reports and
+briefings, earnings links are omitted from all output paths while provenance
+stays saved, and insider qualification/value/date information remains visible.
+Existing earnings/insider alert deduplication cases passed in those same files.
+
 ## Current testing policy
 
 Routine development now uses focused unit tests and relevant lint/syntax checks.
@@ -238,3 +274,58 @@ and state persistence were verified.
 
 Local logs, private state snapshots, downloaded tools and image archives stay in
 ignored local storage. They are not needed to clone the source or run the tests.
+
+
+## 0.8 news and snapshots
+
+The working-tree 0.8.0 candidate adds news quality/second assessments and immutable
+snapshots. This goal did not deploy the Pi, build a container, run ARM/QEMU or a
+storage soak, or poll/send through the real Telegram bot. It preserves the
+existing 0.7.2 earnings/message work.
+
+Final focused checks passed: 29 news cases (including 60 grouped synthetic
+examples), 14 snapshot cases, 12 shared-control cases, and five selected existing
+migration/retention/pause/Finnhub metadata cases. These final groups ran in about
+one second in parallel. The command/credential suite previously passed 31 cases;
+portfolio and ledger suites passed 14 and two cases. Unchanged behavior reused
+those results. Changed-file Ruff checks/formatting and deployment shell syntax
+passed. No broad repeated suite was added.
+
+Coverage includes append-only A→B→A observations, independent ticker/annotation
+availability, issuer ambiguity and numeric EPS comparisons, grouping/material
+corrections, vendor disagreement, request budgets/redaction, one-connection money
+capture, late observations, immutable updates/replacements, actual transaction
+cutoff, US-session scheduling/DST/holidays, silent preparation, missed deadlines,
+manual/automatic expiry, payload failure, owner authorization and durable ledger
+preservation. Optional HTTP model inference was not implemented; no model timeout
+suite or model-quality claim is made.
+
+The owner ran `python3 scripts/check_news_access.py` from normal WSL because the
+execution sandbox could not resolve the API hostname. The bounded Massive check
+returned 62 GOOGL articles and 3 VST articles with matching ticker sentiment for
+all returned items. Evidence: `.local/news-08-probe/access.json`, containing no
+keys or article bodies. It verifies access/shape, not completeness or accuracy.
+No Marketaux key is configured; that optional adapter remains off and its live
+access is unverified.
+
+A small serialization measurement cloned a fixture with three news events,
+vendor reasoning and synthetic positions; it had no cached prices. It is not a
+SQLite/storage soak or a worst-case bound. Saved evidence:
+`.local/news-08-probe/snapshot-sizing.json`.
+
+| Companies | JSON bytes after bounding | Optional evidence trimmed? | Approx. payload for 66 automatic sessions |
+| --- | --- | --- | --- |
+| 10 | 70,996 | No | 4.47 MiB |
+| 50 | 126,267 | Yes | 7.95 MiB |
+| 100 | 251,067 | Yes | 15.80 MiB |
+
+Actual data can be larger. Every packet is capped at 256 KiB; if optional trimming
+is insufficient, capture fails explicitly without dropping holdings. The 66-session
+estimate is illustrative; SQLite pages/indexes/WAL, manual records, news inputs
+and backup copies add storage. Durable trades do not expire. Scheduled packets
+retain three calendar months; manual packets seven days/32 rows. Existing database
+backups and decision snapshots have separate retention policies.
+
+See [release controls/migration/commit message](release-0.8.md) and
+[completed checklist](../todo08-news-snapshots.md). Deployment and one relevant
+Telegram walkthrough remain a separate operational step.

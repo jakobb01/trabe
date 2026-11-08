@@ -9,6 +9,7 @@ from trabe.insights import Insights
 from trabe.maintenance import Maintenance
 from trabe.monitor import Monitor
 from trabe.portfolio import Portfolio
+from trabe.snapshots import SnapshotService
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class Services:
         self.fx = FX(store)
         self.portfolio = Portfolio(store, self.monitor)
         self.insights = Insights(config, store, outbox, self.monitor)
+        self.snapshots = SnapshotService(store)
         self.threads = []
 
     def start(self):
@@ -66,6 +68,7 @@ class Services:
         while not self.stop.wait(30):
             try:
                 self.maintenance.run_once()
+                self.snapshots.schedule(self.insights)
                 failures = 0
             except Exception:
                 failures += 1

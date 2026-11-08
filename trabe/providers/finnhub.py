@@ -93,6 +93,7 @@ class Finnhub:
             "ticker": ticker,
             "currency": "USD",
             "exchange": exchange[:100],
+            "name": raw["name"][:160] if isinstance(raw.get("name"), str) else "",
             "checked_at": time.time(),
         }
         self.store.set_state(state, json.dumps(result))

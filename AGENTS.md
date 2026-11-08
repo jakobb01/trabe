@@ -1,5 +1,10 @@
 # Working on trabe
 
+At the start of a new conversation, read `docs/project-status.md` for the project
+handoff. Verify the current worktree and relevant deployment evidence before
+assuming a release is deployed or changes are committed. Update that note after
+meaningful changes so another conversation can continue without this chat history.
+
 Follow the release priorities in `docs/next-features.md` and the testing policy in
 `CONTRIBUTING.md`. Keep changes small and deliver usable Telegram features.
 

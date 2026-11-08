@@ -11,12 +11,14 @@ from pathlib import Path
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 
 class Store(MarketStorage):
     def __init__(self, path: Path):
+        from trabe.news_store import NEWS_SCHEMA, migrate_legacy
         from trabe.signals import SIGNAL_SCHEMA
+        from trabe.snapshots import SNAPSHOT_SCHEMA
 
         self.path = path
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -58,7 +60,21 @@ class Store(MarketStorage):
                 );
             """)
             db.execute("BEGIN IMMEDIATE")
-            for statement in (*SCHEMA, *SIGNAL_SCHEMA):
+            for statement in (*SCHEMA, *SIGNAL_SCHEMA, *NEWS_SCHEMA):
+                db.execute(statement)
+            news_columns = {row[1] for row in db.execute("PRAGMA table_info(news_revisions)")}
+            for column in ("correction_of", "url"):
+                if column not in news_columns:
+                    db.execute(
+                        f"ALTER TABLE news_revisions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                    )
+            db.execute(
+                "UPDATE news_revisions SET url=(SELECT url FROM news_articles WHERE id=article_id) WHERE url=''"
+            )
+            if version < 6:
+                migrate_legacy(db)
+                db.execute("PRAGMA user_version=6")
+            for statement in SNAPSHOT_SCHEMA:
                 db.execute(statement)
             trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
             for column in ("fx_from", "fx_to"):
@@ -83,9 +99,11 @@ class Store(MarketStorage):
         finally:
             db.close()
 
-    def settings(self) -> dict[str, str]:
-        with self.connection() as db:
-            return dict(db.execute("SELECT key, value FROM settings"))
+    def settings(self, db=None) -> dict[str, str]:
+        if db is None:
+            with self.connection() as connection:
+                return self.settings(connection)
+        return dict(db.execute("SELECT key, value FROM settings"))
 
     def set_setting(self, key: str, value: str):
         value = validate_setting(key, value)
@@ -101,9 +119,11 @@ class Store(MarketStorage):
         with self.connection() as db:
             db.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, value))
 
-    def watchlist(self) -> list[tuple[str, int]]:
-        with self.connection() as db:
-            return db.execute("SELECT ticker, tier FROM watchlist ORDER BY tier, ticker").fetchall()
+    def watchlist(self, db=None) -> list[tuple[str, int]]:
+        if db is None:
+            with self.connection() as connection:
+                return self.watchlist(connection)
+        return db.execute("SELECT ticker, tier FROM watchlist ORDER BY tier, ticker").fetchall()
 
     def add(self, ticker: str, tier: int):
         with self.connection() as db:

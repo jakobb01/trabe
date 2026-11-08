@@ -2,6 +2,7 @@
 
 import calendar
 import json
+import math
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -61,8 +62,38 @@ class USCalendar:
                 return session
         raise ValueError("No verified previous exchange session in calendar.")
 
-    def describe(self, timestamp: float) -> str:
+    def next_session(self, timestamp: float) -> Session:
+        day = datetime.fromtimestamp(timestamp, NY).date()
+        for offset in range(15):
+            session = self.session(day + timedelta(days=offset))
+            if session and session.opens > timestamp:
+                return session
+        raise ValueError("No verified upcoming exchange session in calendar.")
+
+    def describe(self, timestamp: float, timezone: str | None = None) -> str:
         session = self.at(timestamp)
+        if timezone is not None:
+            zone = ZoneInfo(timezone)
+
+            def local(stamp):
+                return datetime.fromtimestamp(stamp, zone).strftime("%Y-%m-%d %H:%M %Z")
+
+            if session and session.contains(timestamp):
+                return f"regular session • opened {local(session.opens)} • closes {local(session.closes)}"
+            upcoming = self.next_session(timestamp)
+            minutes = math.ceil((upcoming.opens - timestamp) / 60)
+            days, minutes = divmod(minutes, 1440)
+            hours, minutes = divmod(minutes, 60)
+            countdown = (f"{days}d " if days else "") + (f"{hours}h " if hours else "")
+            countdown += f"{minutes}m"
+            prefix = (
+                "closed (weekend/holiday) • next "
+                if session is None
+                else "closed • next "
+                if timestamp >= session.closes
+                else ""
+            )
+            return f"{prefix}opens {local(upcoming.opens)} (in {countdown}) • closes {local(upcoming.closes)}"
         if session is None:
             return "closed (weekend/holiday)"
         if session.contains(timestamp):

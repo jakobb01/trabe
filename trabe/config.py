@@ -31,6 +31,8 @@ class Config:
     api_key: str = field(repr=False)
     database: Path
     finnhub_key: str = field(default="", repr=False)
+    massive_key: str = field(default="", repr=False)
+    marketaux_key: str = field(default="", repr=False)
 
     def __post_init__(self):
         if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.token):
@@ -41,6 +43,12 @@ class Config:
             raise ValueError("ALPHA_VANTAGE_API_KEY contains invalid characters.")
         if self.finnhub_key and not re.fullmatch(r"[A-Za-z0-9_-]+", self.finnhub_key):
             raise ValueError("FINNHUB_API_KEY contains invalid characters.")
+        for name, value in (
+            ("MASSIVE_API_KEY", self.massive_key),
+            ("MARKETAUX_API_KEY", self.marketaux_key),
+        ):
+            if value and not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+                raise ValueError(f"{name} contains invalid characters.")
         if not isinstance(self.database, Path) or str(self.database) == ".":
             raise ValueError("DATABASE_PATH must name a database file.")
 
@@ -53,4 +61,12 @@ class Config:
         if not owner.isascii() or not owner.isdecimal() or len(owner) > 16:
             raise ValueError("Pair your private Telegram chat: python3 -m trabe setup.")
         database = Path(values.get("DATABASE_PATH", "data/stock_agent.db"))
-        return cls(token, int(owner), api_key, database, values.get("FINNHUB_API_KEY", "").strip())
+        return cls(
+            token,
+            int(owner),
+            api_key,
+            database,
+            values.get("FINNHUB_API_KEY", "").strip(),
+            values.get("MASSIVE_API_KEY", "").strip(),
+            values.get("MARKETAUX_API_KEY", "").strip(),
+        )

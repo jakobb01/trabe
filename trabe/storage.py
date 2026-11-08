@@ -92,6 +92,9 @@ class MarketStorage:
 
     def reserve_provider(self, provider: str, budget: int, per_minute: int = 45):
         now = time.time()
+        name = {"finnhub": "Finnhub", "massive": "Massive", "marketaux": "Marketaux"}.get(
+            provider, "Provider"
+        )
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM provider_calls WHERE requested_at < ?", (now - 60,))
@@ -99,7 +102,7 @@ class MarketStorage:
                 "SELECT COUNT(*) FROM provider_calls WHERE provider=?", (provider,)
             ).fetchone()[0]
             if count >= per_minute:
-                raise ValueError("Finnhub minute allowance reserved; retry in a minute.")
+                raise ValueError(f"{name} minute allowance reserved; retry in a minute.")
             db.execute(
                 "INSERT OR IGNORE INTO provider_usage VALUES (?,?,0)", (provider, self.today())
             )
@@ -108,16 +111,18 @@ class MarketStorage:
                 (provider, self.today(), budget),
             ).rowcount:
                 raise ValueError(
-                    "Finnhub daily REST budget reached; cached quotes remain available."
+                    f"{name} daily REST budget reached; cached data remains available."
                 )
             db.execute("INSERT INTO provider_calls VALUES (?,?)", (provider, now))
 
-    def cached_live(self, provider: str, ticker: str):
-        with self.connection() as db:
-            row = db.execute(
-                "SELECT payload FROM live_quotes WHERE provider=? AND ticker=?", (provider, ticker)
-            ).fetchone()
-            return json.loads(row[0]) if row else None
+    def cached_live(self, provider: str, ticker: str, db=None):
+        if db is None:
+            with self.connection() as connection:
+                return self.cached_live(provider, ticker, connection)
+        row = db.execute(
+            "SELECT payload FROM live_quotes WHERE provider=? AND ticker=?", (provider, ticker)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
 
     def save_live(self, quote: dict, db=None):
         if db is None:
@@ -143,6 +148,10 @@ class MarketStorage:
                     (str(time.time()),),
                 )
             db.execute("DELETE FROM outbox WHERE kind!='reply'")
+            if until:
+                db.execute(
+                    "UPDATE signal_jobs SET status='cancelled' WHERE status IN ('pending','running') AND json_extract(symbols,'$.origin')='automatic'"
+                )
 
     def alert_rule(self, ticker: str) -> tuple[bool, float]:
         with self.connection() as db:

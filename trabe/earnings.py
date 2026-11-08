@@ -7,6 +7,17 @@ from datetime import UTC, date, datetime, timedelta
 
 from trabe.api import ApiError
 from trabe.calendar import NY, USCalendar
+from trabe.earnings_results import (
+    DELAYED_RESULT_INTERVAL,
+    RESULT_INTERVAL,
+    EarningsResults,
+    calendar_estimates,
+    comparison,
+    expectations,
+    metric_line,
+    number,
+    result_window,
+)
 from trabe.portfolio import Portfolio
 from trabe.signals import SignalStore, WorkStopped
 
@@ -47,6 +58,7 @@ class Earnings:
     def __init__(self, store, http):
         self.store, self.http = store, http
         self.signals = SignalStore(store)
+        self.results = EarningsResults(store, http)
 
     def _records(self, symbols=None):
         if symbols is not None and not symbols:
@@ -170,6 +182,7 @@ class Earnings:
         if conflicts:
             payload["source_conflicts"] = conflicts
         payload["related_dates"] = sorted(related_dates)[-16:]
+        self.results.track(previous, payload, now)
         event_time = datetime.combine(_day(item["date"]), datetime.min.time(), NY).timestamp()
         self.signals.put(
             KIND,
@@ -186,7 +199,10 @@ class Earnings:
         raw = self.http.finnhub(
             "calendar/earnings",
             symbol=symbol,
-            **{"from": today.isoformat(), "to": (today + timedelta(days=90)).isoformat()},
+            **{
+                "from": (today - timedelta(days=7)).isoformat(),
+                "to": (today + timedelta(days=90)).isoformat(),
+            },
         )
         if not isinstance(raw, dict) or not isinstance(raw.get("earningsCalendar"), list):
             raise ApiError("Finnhub earnings response is unavailable or invalid.")
@@ -196,7 +212,7 @@ class Earnings:
                 continue
             try:
                 day = _day(row.get("date"))
-                if not today <= day <= today + timedelta(days=90):
+                if not today - timedelta(days=7) <= day <= today + timedelta(days=90):
                     continue
                 year, quarter = row.get("year"), row.get("quarter")
                 if (
@@ -209,6 +225,10 @@ class Earnings:
                     period = f"FY{year} Q{quarter}"
                 else:
                     alias, period = f"{symbol}:finnhub:date:{day}", "fiscal period unknown"
+                figures = {
+                    field: number(row.get(field), revenue=field.startswith("revenue"))
+                    for field in ("epsEstimate", "epsActual", "revenueEstimate", "revenueActual")
+                }
                 result.append(
                     {
                         "alias": alias,
@@ -217,8 +237,9 @@ class Earnings:
                         "hour": _hour(row.get("hour")),
                         "certainty": "provider-reported",
                         "reported": any(
-                            row.get(field) is not None for field in ("epsActual", "revenueActual")
+                            figures[field] is not None for field in ("epsActual", "revenueActual")
                         ),
+                        **figures,
                         "source_url": SOURCES["finnhub"],
                     }
                 )
@@ -288,6 +309,8 @@ class Earnings:
                             "hour": _hour(row.get("timeOfTheDay")),
                             "certainty": "provider-reported",
                             "reported": False,
+                            "epsEstimate": number(row.get("estimate")),
+                            "fiscal_end": fiscal if not fiscal.startswith("date:") else None,
                             "checked_at": checked_at,
                             "source_url": SOURCES["alphavantage"],
                         }
@@ -319,44 +342,78 @@ class Earnings:
             self.signals.fail(KIND, "alphavantage", "*", "Calendar unavailable", now)
             raise ApiError("Alpha Vantage earnings fallback is unavailable.") from None
 
+    def _refresh_interval(self, symbol, now):
+        for row in self._records([symbol]):
+            payload = row["payload"]
+            if payload.get("superseded_by") or not result_window(payload, now):
+                continue
+            if any(
+                not comparison(
+                    payload.get("comparisons", {}).get(metric, {}).get("actual"),
+                    payload.get("comparisons", {}).get(metric, {}).get("estimate"),
+                )
+                for metric in ("eps", "revenue")
+            ):
+                elapsed = (datetime.fromtimestamp(now, NY).date() - _day(payload["date"])).days
+                return RESULT_INTERVAL if elapsed <= 2 else DELAYED_RESULT_INTERVAL
+        return DAY
+
     def refresh(self, symbols, *, now, force=False):
         symbols = list(dict.fromkeys(symbols))
         today = datetime.fromtimestamp(now, NY).date()
         for symbol in symbols:
-            if not force and not self.signals.due(KIND, "finnhub", symbol, DAY, now):
-                continue
-            self.signals.attempt(KIND, "finnhub", symbol, now)
-            try:
-                rows = self._primary(symbol, today, now)
-                received_at = self._received(now)
-                for item in rows:
-                    self._store_event(symbol, "finnhub", item, received_at)
-                self.signals.ok(KIND, "finnhub", symbol, received_at)
-                self._status(
-                    symbol,
-                    "Finnhub checked; "
-                    + ("schedule cached" if rows else "no upcoming report returned"),
-                )
-                if rows:
-                    continue
-                # An empty primary response is not proof that no event exists.
-            except WorkStopped:
-                raise
-            except Exception:
-                self.signals.fail(KIND, "finnhub", symbol, "Calendar unavailable", now)
-                self._status(symbol, "Finnhub unavailable; retaining cached schedule")
-            try:
-                calendar = self._fallback(symbols, today, now)
-                received_at = self._received(now)
-                for item in calendar.get(symbol, []):
-                    self._store_event(symbol, "alphavantage", item, received_at)
-                self.signals.ok(KIND, "alphavantage", symbol, received_at)
-                self._status(symbol, "Alpha Vantage fallback checked; provider-reported schedule")
-            except WorkStopped:
-                raise
-            except Exception:
-                self.signals.fail(KIND, "alphavantage", symbol, "Fallback unavailable", now)
-                self._status(symbol, "Sources unavailable; cached schedule may be stale")
+            interval = self._refresh_interval(symbol, now)
+            if force or self.signals.due(KIND, "finnhub", symbol, interval, now):
+                self.signals.attempt(KIND, "finnhub", symbol, now)
+                rows = []
+                try:
+                    rows = self._primary(symbol, today, now)
+                    received_at = self._received(now)
+                    for item in rows:
+                        self._store_event(symbol, "finnhub", item, received_at)
+                    self.signals.ok(KIND, "finnhub", symbol, received_at)
+                    self._status(
+                        symbol,
+                        "Finnhub checked; "
+                        + ("schedule cached" if rows else "no upcoming report returned"),
+                    )
+                except WorkStopped:
+                    raise
+                except Exception:
+                    self.signals.fail(
+                        KIND,
+                        "finnhub",
+                        symbol,
+                        "Calendar unavailable",
+                        now,
+                        retry=min(interval, 3600),
+                    )
+                    self._status(symbol, "Finnhub unavailable; retaining cached schedule")
+                if not rows:
+                    try:
+                        calendar = self._fallback(symbols, today, now)
+                        received_at = self._received(now)
+                        for item in calendar.get(symbol, []):
+                            self._store_event(symbol, "alphavantage", item, received_at)
+                        self.signals.ok(KIND, "alphavantage", symbol, received_at)
+                        self._status(
+                            symbol, "Alpha Vantage fallback checked; provider-reported schedule"
+                        )
+                    except WorkStopped:
+                        raise
+                    except Exception:
+                        self.signals.fail(KIND, "alphavantage", symbol, "Fallback unavailable", now)
+                        self._status(symbol, "Sources unavailable; cached schedule may be stale")
+            self.results.refresh(
+                symbol, now=now, interval=self._refresh_interval(symbol, now), force=force
+            )
+            self.results.attach(symbol, now=self._received(now))
+            self.results.fallback(symbol, now=self._received(now), force=force)
+            from trabe.earnings_news import EarningsNews
+
+            EarningsNews(self.store, self.http).refresh(
+                symbol, now=self._received(now), force=force
+            )
 
     def _upcoming(self, symbols, now):
         today = datetime.fromtimestamp(now, NY).date()
@@ -424,23 +481,92 @@ class Earnings:
             return "after-close • release status unconfirmed"
         return item["hour"]
 
+    @staticmethod
+    def _countdown(item, now):
+        days = (_day(item["date"]) - datetime.fromtimestamp(now, NY).date()).days
+        if days < 0:
+            return f"{-days} day{'s' if days != -1 else ''} ago"
+        return "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+
+    def _schedule(self, row, now):
+        item = row["payload"]
+        return (
+            f"{row['symbol']} • {item['date']} • {self._countdown(item, now)}\n"
+            f"{self._time_label(item, now)} • {item['period']}"
+        )
+
+    def _recent_results(self, symbols, now):
+        today = datetime.fromtimestamp(now, NY).date()
+        return sorted(
+            (
+                row
+                for row in self._records(symbols)
+                if not row["payload"].get("superseded_by")
+                and row["payload"].get("comparisons")
+                and -1 <= (today - _day(row["payload"]["date"])).days <= 7
+            ),
+            key=lambda row: row["payload"]["date"],
+            reverse=True,
+        )
+
+    def _waiting_results(self, symbols, now):
+        today = datetime.fromtimestamp(now, NY).date()
+        return [
+            row
+            for row in self._records(symbols)
+            if not row["payload"].get("superseded_by")
+            and not row["payload"].get("reported")
+            and 0 <= (today - _day(row["payload"]["date"])).days <= 7
+            and (today > _day(row["payload"]["date"]) or result_window(row["payload"], now))
+        ]
+
+    @staticmethod
+    def _result_card(row):
+        payload = row["payload"]
+        lines = [f"{row['symbol']} • {payload['period']} • reported results"]
+        news_eps = payload["comparisons"].get("eps", {}).get("source") == "yahoo-news"
+        for metric in ("eps", "revenue"):
+            data = payload["comparisons"].get(metric, {})
+            if news_eps and metric == "revenue" and data.get("actual") is None:
+                lines.append("Revenue actual: unavailable")
+            else:
+                lines.append(metric_line(metric, data))
+        if payload["comparisons"].get("eps", {}).get("source") == "alphavantage":
+            lines.append("Alpha Vantage fallback • EPS uses its own estimate.")
+        if payload["comparisons"].get("revenue", {}).get("source") == "alphavantage":
+            lines.append(
+                "Revenue: Alpha Vantage fallback • no paired estimate; no beat/miss grade."
+            )
+        if news_eps:
+            saved = calendar_estimates(payload, row.get("source"))
+            if saved:
+                lines.append(saved)
+            lines.append(
+                "Yahoo news • current fiscal quarter matched; estimate basis not matched. No beat/miss grade."
+            )
+        return "\n".join(lines)
+
     def report(self, symbols, *, now):
         rows = self._upcoming(symbols, now)
-        result = ["Upcoming earnings • cached provider-reported schedules"]
-        if not rows:
+        recent = self._recent_results(symbols, now)
+        waiting = [
+            row
+            for row in self._waiting_results(symbols, now)
+            if row["key"] not in {r["key"] for r in rows}
+        ]
+        result = ["📅 Earnings"]
+        if not rows and not recent and not waiting:
             result.append(
-                "No upcoming report cached. This does not confirm that no report is scheduled; use /earnings refresh."
+                "No upcoming report cached. Coverage may be unavailable; use /earnings refresh."
             )
-        for row in rows[:30]:
+        for row in rows[:10]:
             item = row["payload"]
             checked = datetime.fromtimestamp(
                 item.get("checked_at", row["observed_at"]), UTC
-            ).isoformat()
+            ).strftime("%d %b %H:%M UTC")
             stale = now - item.get("checked_at", 0) > 2 * DAY
-            result.append(
-                f"{row['symbol']}: {item['date']} • {self._time_label(item, now)} • {item['period']}\n"
-                f"  {row['source']} • checked {checked}" + (" • STALE" if stale else "")
-            )
+            result.append("\n" + self._schedule(row, now))
+            result.append(expectations(item))
             if item.get("conflict") or item.get("source_conflicts"):
                 result.append(
                     "  Source conflict: "
@@ -450,16 +576,77 @@ class Earnings:
                     )
                     + "; identity/date remains uncertain."
                 )
-            result.append("  " + self._exposure(row["symbol"], now))
-            result.append(item["source_url"])
-        if len(rows) > 30:
-            result.append(f"Showing first 30 of {len(rows)} cached upcoming reports.")
+            exposure = self._exposure(row["symbol"], now)
+            if exposure != "Watchlist only":
+                result.append(exposure)
+            result.append(f"Last checked: {checked}" + (" • STALE" if stale else ""))
+        if len(rows) > 10:
+            result.append(f"Showing first 10 of {len(rows)} cached upcoming reports.")
+        for row in waiting[:3]:
+            result.extend(
+                (
+                    "\n" + self._schedule(row, now),
+                    expectations(row["payload"]),
+                    "Results not confirmed in available provider data; refresh or check the source.",
+                )
+            )
+        for row in recent[:3]:
+            result.append("\n" + self._result_card(row))
+        result.append("\nRecent quarters • EPS (actual vs expected)")
+        for symbol in list(dict.fromkeys(symbols))[:10]:
+            history = self.results.history(symbol)
+            if not history:
+                result.append(f"{symbol}: quarterly history unavailable.")
+            elif len(symbols) == 1:
+                for quarter in history:
+                    result.append(
+                        f"FY{quarter['year']} Q{quarter['quarter']} • "
+                        + metric_line("eps", quarter)
+                    )
+            else:
+                result.append(
+                    symbol
+                    + ": "
+                    + " · ".join(
+                        f"FY{q['year']} Q{q['quarter']} {comparison(q['actual'], q['estimate'])[0] if comparison(q['actual'], q['estimate']) else 'unavailable'}"
+                        for q in history
+                    )
+                )
+            history_status = next(
+                (
+                    status
+                    for status in self.signals.status(KIND)
+                    if status["symbol"] == symbol and status["source"] == "finnhub-history"
+                ),
+                None,
+            )
+            cached_history = self.signals.get("earnings-history", symbol)
+            if history and (
+                (history_status and history_status["error"])
+                or (cached_history and now - cached_history["payload"]["checked_at"] > 2 * DAY)
+            ):
+                result.append(
+                    f"⚠️ {symbol}: quarterly history may be stale; cached results retained."
+                )
         for symbol in list(dict.fromkeys(symbols))[:8]:
+            for status in self.signals.status(KIND):
+                if (
+                    status["symbol"] == symbol
+                    and (
+                        status["source"] == "yahoo-news"
+                        or (
+                            status["source"].startswith("alphavantage-")
+                            and self.store.state("earnings_alpha_disabled", "1") == "0"
+                        )
+                    )
+                    and status["error"]
+                ):
+                    result.append(f"⚠️ {symbol}: {status['error']}")
             state = self.store.state("earnings_status_" + symbol)
-            if state:
+            if state and state != "Finnhub checked; schedule cached":
                 result.append(f"{symbol}: {state}")
         result.append(
-            "Dates may change. Time categories are not exact release times or company confirmations."
+            "\nDates may change. These are provider-reported schedules; times are approximate. EPS/revenue use provider units, without currency conversion."
         )
         return "\n".join(result)
 
@@ -507,24 +694,46 @@ class Earnings:
                 continue
             else:
                 key = f"warning:{symbol}:{item['date']}"
-                text = f"📅 Upcoming earnings • {symbol}\nExpected: {item['date']} • {self._time_label(item, now)}\nIn {days} calendar days\n"
+                text = f"📅 Upcoming earnings • {symbol}\nExpected: {item['date']} • {self._countdown(item, now)} • {self._time_label(item, now)}\n"
+            text += item["period"] + "\n"
+            text += expectations(item) + "\n"
+            exposure = self._exposure(symbol, now)
+            if exposure != "Watchlist only":
+                text += exposure + "\n"
             text += (
-                f"{item['period']} • provider-reported schedule\n{self._exposure(symbol, now)}\n"
-                f"Source: {row['source']} • checked {datetime.fromtimestamp(item['checked_at'], UTC).isoformat()}\n"
-                + item["source_url"]
+                f"Last checked: {datetime.fromtimestamp(item['checked_at'], UTC).strftime('%d %b %H:%M UTC')}\n"
+                "Dates may change. Provider-reported schedule."
             )
             result.append((key, text))
+        result.extend(self.results.alerts(symbols, now=now))
         return result
 
     def briefing(self, symbols, *, now, limit=3):
-        return [
-            f"{row['symbol']}: expected {row['payload']['date']} ({self._time_label(row['payload'], now)}; {row['source']}"
+        results = [self._result_card(row) for row in self._recent_results(symbols, now)[:limit]]
+        upcoming = self._upcoming(symbols, now)
+        waiting = [
+            row
+            for row in self._waiting_results(symbols, now)
+            if row["key"] not in {r["key"] for r in upcoming}
+        ]
+        results.extend(
+            (
+                self._schedule(row, now)
+                + "\n"
+                + expectations(row["payload"])
+                + "\nResults not confirmed in available provider data; refresh or check the source."
+            )
+            for row in waiting[: max(0, limit - len(results))]
+        )
+        return results + [
+            self._schedule(row, now)
+            + "\n"
+            + expectations(row["payload"])
             + (
-                "; source conflict"
+                " • source conflict"
                 if row["payload"].get("conflict") or row["payload"].get("source_conflicts")
                 else ""
             )
-            + ("; stale" if now - row["payload"].get("checked_at", 0) > 2 * DAY else "")
-            + ")"
-            for row in self._upcoming(symbols, now)[:limit]
+            + (" • stale" if now - row["payload"].get("checked_at", 0) > 2 * DAY else "")
+            for row in upcoming[: max(0, limit - len(results))]
         ]

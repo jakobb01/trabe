@@ -87,7 +87,9 @@ if [[ "$mode" == bundled ]]; then
 fi
 
 rollback() {
+    local failure_code=$1 failure_line=$2
     trap - ERR
+    printf 'Deployment failed during %s (line %s, exit %s).\n' "$deployment_phase" "$failure_line" "$failure_code" >&2
     printf '%s\n' 'Service state at failure (before rollback):' >&2
     systemctl --user status stock-agent.service --no-pager -l >&2 || true
     journalctl --user -u stock-agent.service -n 60 --no-pager >&2 || true
@@ -133,6 +135,7 @@ rollback() {
         # Prune only files: this must not migrate a restored older database.
         podman run --rm --network=none --read-only --cap-drop=all \
             --security-opt=no-new-privileges --env-file "$config_dir/agent.env" \
+            --env DATABASE_PATH=/data/stock_agent.db \
             -v stock-agent-data:/data:U "$image" \
             python -m trabe backup-prune --release "$database_backup" || true
     fi
@@ -140,7 +143,8 @@ rollback() {
     printf '%s\n' 'Inspect: journalctl --user -u stock-agent.service -n 80 --no-pager' >&2
     exit 1
 }
-trap rollback ERR
+deployment_phase='installing the new configuration'
+trap 'rollback "$?" "$LINENO"' ERR
 
 podman tag "$image" localhost/stock-agent:current
 install -m 600 "$environment_file" "$config_dir/agent.env"
@@ -150,6 +154,7 @@ if [[ "$mode" == bundled ]]; then
     install -d -m 700 "$tool_dir"
     install -m 700 "$source_dir/deploy/tools/quadlet" "$tool_dir/quadlet"
 fi
+deployment_phase='starting the new service'
 systemctl --user daemon-reload
 systemctl --user restart stock-agent.service
 
@@ -162,23 +167,50 @@ wait_ready() {
     done
     return 1
 }
+deployment_phase='initial Telegram readiness'
 wait_ready
 # Validate the market API first. Announce deployment only after restart succeeds.
+deployment_phase='market API verification'
 podman exec stock-agent python -m trabe doctor --market --validate-finnhub
-# A real restart must preserve the watchlist and all user preferences.
-state_digest='import hashlib,json,os; from pathlib import Path; from trabe.store import Store; store=Store(Path(os.environ["DATABASE_PATH"])); data={"settings":store.settings(),"watchlist":store.watchlist()}; connection=store.connection(); db=connection.__enter__(); data["trades"]=db.execute("SELECT id,ticker,side,quantity,price,currency,trade_date,fee,created_at,voided_at,update_id FROM trades ORDER BY id").fetchall(); connection.__exit__(None,None,None); print(hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest())'
+# One coherent read-only snapshot; compare user data without printing its values.
+state_digest='import hashlib,json,os,sqlite3
+from pathlib import Path
+path=Path(os.environ["DATABASE_PATH"]).resolve()
+with sqlite3.connect(path.as_uri()+"?mode=ro",uri=True) as db:
+    db.execute("BEGIN")
+    data={
+        "settings":db.execute("SELECT key,value FROM settings ORDER BY key").fetchall(),
+        "watchlist":db.execute("SELECT ticker,tier FROM watchlist ORDER BY tier,ticker").fetchall(),
+        "trades":db.execute("SELECT id,ticker,side,quantity,price,currency,trade_date,fee,created_at,voided_at,update_id FROM trades ORDER BY id").fetchall(),
+    }
+print(" ".join(hashlib.sha256(json.dumps(data[key],sort_keys=True).encode()).hexdigest() for key in ("settings","watchlist","trades")))'
+deployment_phase='capturing saved state before restart'
 before_restart=$(podman exec stock-agent python -c "$state_digest")
+deployment_phase='verification restart'
 systemctl --user restart stock-agent.service
+deployment_phase='Telegram readiness after restart'
 wait_ready
+deployment_phase='restart persistence comparison'
 after_restart=$(podman exec stock-agent python -c "$state_digest")
-[[ "$before_restart" == "$after_restart" ]]
+if [[ "$before_restart" != "$after_restart" ]]; then
+    read -r before_settings before_watchlist before_trades <<< "$before_restart"
+    read -r after_settings after_watchlist after_trades <<< "$after_restart"
+    [[ "$before_settings" == "$after_settings" ]] || printf '%s\n' 'Verification difference: saved preferences changed.' >&2
+    [[ "$before_watchlist" == "$after_watchlist" ]] || printf '%s\n' 'Verification difference: watchlist changed.' >&2
+    [[ "$before_trades" == "$after_trades" ]] || printf '%s\n' 'Verification difference: recorded trades changed.' >&2
+    printf '%s\n' 'Telegram edits during rollout also change this check. Keep settings/watchlist/trades unchanged until deployment verification finishes.' >&2
+    false
+fi
+deployment_phase='service and published-port verification'
 systemctl --user is-active stock-agent.service
 [[ -z $(podman port stock-agent) ]]
+deployment_phase='backup snapshot cleanup'
 if [[ -n "$database_backup" ]]; then
     podman exec stock-agent python -m trabe backup-prune --release "$database_backup"
 else
     podman exec stock-agent python -m trabe backup-prune
 fi
+deployment_phase='Telegram delivery confirmation'
 podman exec stock-agent python -m trabe doctor --send
 
 trap - ERR

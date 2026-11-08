@@ -13,11 +13,20 @@ from trabe.api import Telegram
 from trabe.config import read_env
 
 
-def write_credentials(path: Path, token: str, owner: int, key: str, finnhub_key: str = ""):
+def write_credentials(
+    path: Path,
+    token: str,
+    owner: int,
+    key: str,
+    finnhub_key: str = "",
+    massive_key: str = "",
+    marketaux_key: str = "",
+):
     path.parent.mkdir(parents=True, exist_ok=True)
     text = (
         f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_CHAT_ID={owner}\n"
         f"ALPHA_VANTAGE_API_KEY={key}\nFINNHUB_API_KEY={finnhub_key}\n"
+        f"MASSIVE_API_KEY={massive_key}\nMARKETAUX_API_KEY={marketaux_key}\n"
         "DATABASE_PATH=data/stock_agent.db\n"
     )
     # Atomic replacement and mode 0600, even if an existing file is more permissive.
@@ -39,6 +48,11 @@ def setup(path: Path):
     )
     key = values.get("ALPHA_VANTAGE_API_KEY", "").strip()
     finnhub_key = values.get("FINNHUB_API_KEY", "").strip()
+    massive_key = values.get("MASSIVE_API_KEY", "").strip()
+    marketaux_key = values.get("MARKETAUX_API_KEY", "").strip()
+    for name, value in (("MASSIVE_API_KEY", massive_key), ("MARKETAUX_API_KEY", marketaux_key)):
+        if value and not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+            raise ValueError(f"{name} contains invalid characters.")
     if not key:
         key = getpass.getpass("Alpha Vantage key (hidden; Enter to configure later): ").strip()
     # Validate without storing or exposing the supplied secrets.
@@ -77,7 +91,7 @@ def setup(path: Path):
                 and isinstance(text, str)
                 and hmac.compare_digest(text.encode(), challenge.encode())
             ):
-                write_credentials(path, token, owner, key, finnhub_key)
+                write_credentials(path, token, owner, key, finnhub_key, massive_key, marketaux_key)
                 print(
                     f"Credentials saved to {path} with mode 0600. Confirming Telegram delivery…",
                     flush=True,

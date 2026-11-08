@@ -1,6 +1,7 @@
 """Reported executive/director purchases with explicit filing qualification."""
 
 import hashlib
+import json
 import re
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
@@ -10,6 +11,7 @@ from trabe.signals import SignalStore, WorkStopped
 
 CACHE_SECONDS = 6 * 3600
 RECENT_SECONDS = 7 * 86400
+MAX_PURCHASES = 500
 TRACEFOUR = "https://tracefour.com/v1/filings"
 ATTRIBUTION = "https://tracefour.com/filings"
 FLAGS = (
@@ -44,6 +46,14 @@ def _timestamp(value):
     if parsed.tzinfo is None:
         raise ValueError("Publication timezone is missing.")
     return parsed.timestamp()
+
+
+def _checked(timestamp, now):
+    if not timestamp:
+        return "not checked"
+    return datetime.fromtimestamp(timestamp, UTC).strftime("%d %b %H:%M UTC") + (
+        " • stale coverage" if now - timestamp > CACHE_SECONDS * 2 else ""
+    )
 
 
 def _date(value):
@@ -224,6 +234,43 @@ class Insiders:
         self.store, self.http = store, http
         self.repo = SignalStore(store)
 
+    def _transactions(self, symbol, today):
+        """Keep every bounded response and split crowded date ranges, newest first."""
+        ranges = [(today - timedelta(days=90), today)]
+        candidates, requests, partial = {}, 0, False
+        while ranges and requests < 7:
+            start, end = ranges.pop()
+            requests += 1
+            try:
+                response = self.http.finnhub(
+                    "stock/insider-transactions",
+                    symbol=symbol,
+                    **{"from": start.isoformat(), "to": end.isoformat()},
+                )
+                if not isinstance(response, dict) or not isinstance(response.get("data"), list):
+                    raise ValueError("Invalid transaction response.")
+            except WorkStopped:
+                raise
+            except Exception:
+                if requests == 1:
+                    raise
+                partial = True
+                continue
+            for row in response["data"][:2000]:
+                if isinstance(row, dict) and row.get("symbol") == symbol:
+                    identity = json.dumps(row, sort_keys=True)
+                    if identity in candidates or len(candidates) < 2000:
+                        candidates[identity] = row
+                    else:
+                        partial = True
+            if len(response["data"]) >= 100:
+                if start == end:
+                    partial = True
+                else:
+                    middle = start + (end - start) // 2
+                    ranges.extend(((start, middle), (middle + timedelta(days=1), end)))
+        return list(candidates.values()), partial or bool(ranges), requests
+
     def refresh(self, symbols, *, now, force=False):
         today = datetime.fromtimestamp(now, UTC).date()
         for symbol in sorted(set(symbols)):
@@ -253,7 +300,7 @@ class Insiders:
                             "ticker": symbol,
                             "direction": "P",
                             "since": (today - timedelta(days=90)).isoformat(),
-                            "limit": 500,
+                            "limit": MAX_PURCHASES,
                         }
                     )
                 )
@@ -264,17 +311,18 @@ class Insiders:
                     or not isinstance(envelope.get("data"), list)
                 ):
                     raise ValueError("Invalid filing response.")
-                primary = envelope["data"][:500]
+                primary = envelope["data"][:MAX_PURCHASES]
+                trace_received = max(now, getattr(self.http, "received_at", now))
                 self.repo.ok(
                     "insiders",
                     "tracefour",
                     symbol,
-                    max(now, getattr(self.http, "received_at", now)),
+                    trace_received,
                 )
                 self.store.set_state(
                     "insiders_warning_" + symbol,
                     "Source response reached its 500-row cap; coverage may be partial."
-                    if len(envelope["data"]) >= 500
+                    if len(envelope["data"]) >= MAX_PURCHASES
                     else "",
                 )
             except WorkStopped:
@@ -290,14 +338,36 @@ class Insiders:
             candidates = []
             self.repo.attempt("insiders", "finnhub", symbol, now)
             try:
-                response = self.http.finnhub(
-                    "stock/insider-transactions",
-                    symbol=symbol,
-                    **{"from": (today - timedelta(days=90)).isoformat(), "to": today.isoformat()},
+                candidates, partial, requests = self._transactions(symbol, today)
+                self.store.set_state(
+                    "insiders_finnhub_warning_" + symbol,
+                    "Finnhub verification coverage may be incomplete; a crowded or failed date range remains."
+                    if partial
+                    else "",
                 )
-                if not isinstance(response, dict) or not isinstance(response.get("data"), list):
-                    raise ValueError("Invalid transaction response.")
-                candidates = [row for row in response["data"][:100] if isinstance(row, dict)]
+                received = max(now, getattr(self.http, "received_at", now))
+                coverage = self.repo.get("insider-coverage", symbol)
+                details = dict(coverage["payload"]) if coverage else {}
+                details.update(
+                    {
+                        "from": (today - timedelta(days=90)).isoformat(),
+                        "to": today.isoformat(),
+                        "transactions": len(candidates),
+                        "purchases": sum(c.get("transactionCode") == "P" for c in candidates),
+                        "partial": partial,
+                        "requests": requests,
+                        "checked_at": received,
+                    }
+                )
+                self.repo.put(
+                    "insider-coverage",
+                    symbol,
+                    symbol,
+                    "finnhub",
+                    details,
+                    now=received,
+                    event_time=received,
+                )
                 self.repo.ok(
                     "insiders", "finnhub", symbol, max(now, getattr(self.http, "received_at", now))
                 )
@@ -316,12 +386,30 @@ class Insiders:
                 values = [
                     value
                     for raw in primary
-                    if (value := normalize(raw, candidates, symbol, received))
+                    if (value := normalize(raw, candidates, symbol, trace_received))
                 ]
+                coverage = self.repo.get("insider-coverage", symbol)
+                details = dict(coverage["payload"]) if coverage else {}
+                details.update(
+                    trace_purchases=len(primary),
+                    trace_checked_at=trace_received,
+                    trace_rejected=len(primary) - len(values),
+                    verified=sum(self._qualified(v) for v in values),
+                    unverified=sum(not self._qualified(v) for v in values),
+                )
+                self.repo.put(
+                    "insider-coverage",
+                    symbol,
+                    symbol,
+                    "Tracefour + Finnhub",
+                    details,
+                    now=received,
+                    event_time=received,
+                )
                 for value in sorted(values, key=lambda value: value["published_at"], reverse=True)[
-                    :100
+                    :MAX_PURCHASES
                 ]:
-                    value["source_fetched_at"] = received
+                    value["source_fetched_at"] = trace_received
                     key = symbol + ":" + value["filing_id"]
                     old = self.repo.get("insiders", key)
                     first_seen = old["observed_at"] if old else received
@@ -340,7 +428,7 @@ class Insiders:
                     )
                 self._reconcile_amendments(symbol, received)
                 retained = self.repo.rows("insiders", [symbol], limit=10000)
-                for row in retained[100:]:
+                for row in retained[MAX_PURCHASES:]:
                     self.repo.delete("insiders", row["key"])
 
     def _reconcile_amendments(self, symbol, now):
@@ -384,16 +472,18 @@ class Insiders:
     def _rows(self, symbols):
         return self.repo.rows("insiders", symbols, limit=5000)
 
-    def _line(self, row):
+    def _line(self, row, *, compact=False):
         value = row["payload"]
         role = "/".join(value["roles"]) or value["title"] or "role unknown"
         status = (
-            "qualified"
+            "✅ Qualified"
             if self._qualified(value)
-            else "unqualified: "
+            else "⚠️ Unqualified: "
             + (", ".join(value["eligibility_errors"]) or "below configured value threshold")
         )
-        published = datetime.fromtimestamp(value["published_at"], UTC).isoformat()
+        published = datetime.fromtimestamp(value["published_at"], UTC).strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
         context = [
             name
             for field, name in (
@@ -404,49 +494,80 @@ class Insiders:
             )
             if value["flags"].get(field)
         ]
+        links = (
+            f"SEC: {value['source_url']}\n"
+            if value["source_url"]
+            else "SEC filing link unavailable\n"
+        ) + f"Tracefour (CC BY 4.0): {value['attribution_url']}"
+        if compact:
+            return (
+                f"{row['symbol']} • {Decimal(value['value_usd']):,.2f} USD • {role}\n"
+                f"{value['owner']} • traded {value['transaction_date']} • filed {published}\n"
+                f"{value['purchase_classification']}\n" + links
+            )
         return (
-            f"{row['symbol']} • {value['owner']} • {role}\n"
-            f"{value['shares']} shares at {Decimal(value['price']):.4f} USD • {Decimal(value['value_usd']):,.2f} USD\n"
-            f"Transaction {value['transaction_date']} • filed {published}\n"
+            f"{row['symbol']} • {value['owner']} ({role})\n"
+            f"Value: {Decimal(value['value_usd']):,.2f} USD • {Decimal(value['shares']):,f} shares × {Decimal(value['price']):,.4f} USD\n"
+            f"Traded: {value['transaction_date']} • Filed: {published}\n"
             f"{value['purchase_classification']} • {status}\n"
             + ("Context: " + ", ".join(context) + "\n" if context else "")
-            + (
-                f"SEC: {value['source_url']}\n"
-                if value["source_url"]
-                else "SEC filing link unavailable\n"
-            )
-            + f"Tracefour (CC BY 4.0): {value['attribution_url']}"
+            + links
         )
 
     def report(self, symbols, *, now):
         rows = self._rows(symbols)
-        result = ["Insider purchases • cached reported Form 4 data"]
+        result = ["🚨 Insider purchases"]
+        result.append(
+            "P purchases only • CEO/CFO/director • minimum "
+            + self.store.settings()["insider_min_value_usd"]
+            + " USD"
+        )
         if not rows:
-            result.append(
-                "No cached purchase records. A missing result is not proof of no insider activity."
-            )
+            result.append("No purchases cached in the inspected window.")
         result.extend(
             self._line(row)
             for row in sorted(rows, key=lambda row: row["payload"]["published_at"], reverse=True)[
-                :8
+                :5
             ]
         )
+        if len(rows) > 5:
+            result.append(f"Showing 5 of {len(rows)} cached purchases. More: /insiders TICKER")
         for status in self.repo.status("insiders"):
             if status["symbol"] in symbols and status["error"]:
                 result.append(f"{status['symbol']} {status['source']}: {status['error']}")
         for symbol in symbols:
-            warning = self.store.state("insiders_warning_" + symbol)
-            if warning:
-                result.append(f"{symbol}: {warning}")
+            coverage = self.repo.get("insider-coverage", symbol)
+            if coverage:
+                detail = coverage["payload"]
+                cached = [row for row in rows if row["symbol"] == symbol]
+                qualified = sum(self._qualified(row["payload"]) for row in cached)
+                result.append(
+                    f"{symbol} • 90-day coverage\n"
+                    f"Tracefour: {detail.get('trace_purchases', 'unavailable')} purchase rows • checked {_checked(detail.get('trace_checked_at'), now)}\n"
+                    f"Finnhub: {detail.get('purchases', 'unavailable')} P transactions / {detail.get('transactions', 'unavailable')} total • checked {_checked(detail.get('checked_at'), now)}\n"
+                    f"Verified eligible: {qualified} • unverified/excluded: {len(cached) - qualified} • cached: {len(cached)}"
+                )
+                if detail.get("trace_rejected"):
+                    result.append(
+                        f"{symbol}: Unusable filing rows: {detail['trace_rejected']}; purchase coverage may be incomplete."
+                    )
+                if detail.get("purchases", 0) > detail.get("trace_purchases", 0):
+                    result.append(
+                        f"{symbol}: Finnhub has more P transactions than Tracefour; role/filing coverage may be incomplete."
+                    )
+            else:
+                result.append(f"{symbol}: coverage has not been checked yet.")
+            for prefix in ("insiders_warning_", "insiders_finnhub_warning_"):
+                warning = self.store.state(prefix + symbol)
+                if warning:
+                    result.append(f"{symbol}: {warning}")
         if rows:
             checked = max(row["last_seen"] for row in rows)
             result.append(
-                f"Last observed: {datetime.fromtimestamp(checked, UTC).isoformat()}"
+                f"Last observed: {datetime.fromtimestamp(checked, UTC).strftime('%d %b %H:%M UTC')}"
                 + (" • stale coverage" if now - checked > CACHE_SECONDS * 2 else "")
             )
-        result.append(
-            "Qualification uses reported role plus a matching non-derivative transaction; P does not prove an exchange venue."
-        )
+        result.append("Reported purchases; open-market/private does not confirm an exchange venue.")
         return "\n\n".join(result)
 
     def alerts(self, symbols, *, now):
@@ -490,10 +611,7 @@ class Insiders:
         for row in sorted(rows, key=lambda row: row["payload"]["published_at"], reverse=True)[
             :limit
         ]:
-            value = row["payload"]
-            lines.append(
-                f"{row['symbol']}: {value['owner']} ({'/'.join(value['roles'])}) reported P purchase {Decimal(value['value_usd']):,.0f} USD; filed {datetime.fromtimestamp(value['published_at'], UTC).date()}. SEC: {value['source_url']} • Tracefour: {value['attribution_url']}"
-            )
+            lines.append(self._line(row, compact=True))
         return lines or [
-            "No recent qualified cached insider purchases; unavailable or unverified coverage is not a no-activity guarantee."
+            "No recent qualified insider purchases cached; coverage may be unavailable."
         ]

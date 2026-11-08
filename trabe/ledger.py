@@ -141,13 +141,14 @@ class Ledger:
         with self.store.connection() as db:
             return self._rows(db, ticker)
 
-    def positions(self, currency):
-        with self.store.connection() as db:
-            symbols = [
-                r[0]
-                for r in db.execute("SELECT DISTINCT ticker FROM trades WHERE voided_at IS NULL")
-            ]
-            return {ticker: replay(self._rows(db, ticker), currency) for ticker in symbols}
+    def positions(self, currency, db=None):
+        if db is None:
+            with self.store.connection() as connection:
+                return self.positions(currency, connection)
+        symbols = [
+            r[0] for r in db.execute("SELECT DISTINCT ticker FROM trades WHERE voided_at IS NULL")
+        ]
+        return {ticker: replay(self._rows(db, ticker), currency) for ticker in symbols}
 
     def history(self, ticker):
         with self.store.connection() as db:

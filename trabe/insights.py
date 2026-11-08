@@ -25,13 +25,19 @@ class Insights:
         self.stop, self.wake = threading.Event(), threading.Event()
         self.worker = None
 
-    def feature(self, kind, *, automatic=False, context=None):
+    def feature(self, kind, *, automatic=False, context=None, deadline=None, guard_settings=None):
         from trabe.earnings import Earnings
         from trabe.insiders import Insiders
         from trabe.news import News
 
         http = self.http_factory(
-            self.config, self.store, stop=self.stop, automatic=automatic, feature=context or kind
+            self.config,
+            self.store,
+            stop=self.stop,
+            automatic=automatic,
+            feature=context or kind,
+            deadline=deadline,
+            guard_settings=guard_settings,
         )
         return {"earnings": Earnings, "insiders": Insiders, "news": News}[kind](self.store, http)
 
@@ -41,40 +47,103 @@ class Insights:
         self.worker = threading.Thread(target=self.run, name="fundamentals", daemon=True)
         self.worker.start()
 
+    def market_context(self, *, automatic=False):
+        from trabe.market_context import MarketContext
+
+        return MarketContext(
+            self.store,
+            self.http_factory(
+                self.config, self.store, stop=self.stop, automatic=automatic, feature="briefing"
+            ),
+        )
+
+    def market_news(self, *, automatic=False):
+        from trabe.market_news import MarketNews
+
+        return MarketNews(
+            self.store,
+            self.http_factory(
+                self.config, self.store, stop=self.stop, automatic=automatic, feature="briefing"
+            ),
+        )
+
     def close(self):
         self.stop.set()
         self.wake.set()
         if self.worker:
             self.worker.join(timeout=5)
 
-    def queue(self, kind, symbols=None):
+    def queue(self, kind, symbols=None, *, origin="manual", gate=None, deadline=None, session=None):
         if kind not in (*FEATURES, "briefing"):
             raise ValueError("Unknown refresh type.")
         selected = sorted(Ledger(self.store).coverage() if symbols is None else set(symbols))
         if not selected:
-            return "Add a watchlist symbol or record a position first."
-        encoded = json.dumps({"all": selected, "remaining": selected})
+            return (
+                None
+                if origin == "automatic"
+                else "Add a watchlist symbol or record a position first."
+            )
+        held = Ledger(self.store).held()
+        selected.sort(key=lambda ticker: (ticker not in held, ticker))
+        settings = self.store.settings()
+        encoded = json.dumps(
+            {
+                "all": selected,
+                "remaining": selected,
+                "origin": origin,
+                "gate": gate,
+                "deadline": deadline,
+                "session": session,
+                "settings": {k: settings[k] for k in ("snapshot_time", "timezone")}
+                if origin == "automatic"
+                else {},
+            }
+        )
         with self.store.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             active = db.execute(
                 "SELECT kind,symbols FROM signal_jobs WHERE status IN ('pending','running')"
             ).fetchall()
-            if any(k == kind and json.loads(s)["all"] == selected for k, s in active):
+            if origin == "automatic":
+                existing = db.execute(
+                    "SELECT id FROM signal_jobs WHERE kind=? AND json_extract(symbols,'$.origin')='automatic' AND json_extract(symbols,'$.session')=? AND json_extract(symbols,'$.gate')=? ORDER BY id DESC LIMIT 1",
+                    (kind, session, gate),
+                ).fetchone()
+                if existing:
+                    return existing[0]
+            if any(
+                k == kind
+                and json.loads(s)["all"] == selected
+                and json.loads(s).get("origin", "manual") == origin
+                for k, s in active
+            ):
                 return "A matching refresh is already queued; /status remains available."
             if len(active) >= 16:
-                return "The refresh queue is full; cached views remain available."
-            db.execute(
+                return (
+                    None
+                    if origin == "automatic"
+                    else "The refresh queue is full; cached views remain available."
+                )
+            cursor = db.execute(
                 "INSERT INTO signal_jobs(kind,symbols,created_at) VALUES (?,?,?)",
                 (kind, encoded, time.time()),
             )
         self.wake.set()
+        if origin == "automatic":
+            return cursor.lastrowid
         return f"{kind.capitalize()} refresh queued for {len(selected)} symbol(s). I'll send the result here."
 
     def handle(self, command, args):
+        if command == "insider":
+            command = "insiders"
         if command in FEATURES:
-            if len(args) > 1:
-                raise ValueError(f"Usage: /{command} [TICKER|on|off|refresh]")
+            if len(args) > 2 or (len(args) == 2 and args[0].lower() not in ("cached", "refresh")):
+                raise ValueError(
+                    f"Usage: /{command} [TICKER|cached [TICKER]|refresh [TICKER]|on|off]"
+                )
             option = args[0].lower() if args else ""
+            if command == "news" and option == "sources":
+                return self.feature("news").sources_status(sorted(Ledger(self.store).coverage()))
             if option in ("on", "off"):
                 if (
                     option == "on"
@@ -96,28 +165,31 @@ class Insights:
                     db.execute(
                         "UPDATE settings SET value=? WHERE key=?", (option, command + "_enabled")
                     )
-                    if command == "insiders" and option == "on" and previous != "on":
+                    if command in ("insiders", "earnings") and option == "on" and previous != "on":
                         db.execute(
-                            "INSERT OR REPLACE INTO state VALUES ('insiders_enabled_at',?)",
-                            (str(time.time()),),
+                            "INSERT OR REPLACE INTO state VALUES (?,?)",
+                            (command + "_enabled_at", str(time.time())),
                         )
                     if option == "off":
                         db.execute("DELETE FROM outbox WHERE kind=?", (command,))
                 self.wake.set()
                 return f"{command.capitalize()} automation {option}. Cached views remain available; /{command} refresh requests new data."
-            if option == "refresh":
-                return self.queue(command)
+            if option in ("cached", "refresh"):
+                from trabe.bot import symbol
+
+                symbols = [symbol(args[1])] if len(args) == 2 else None
+                if option == "refresh":
+                    return self.queue(command, symbols)
+                if symbols is None:
+                    symbols = sorted(Ledger(self.store).coverage())
+                return self.feature(command).report(symbols, now=time.time())
             if args:
                 from trabe.bot import symbol
 
                 symbols = [symbol(args[0])]
             else:
-                symbols = sorted(Ledger(self.store).coverage())
-            text = self.feature(command).report(symbols, now=time.time())
-            covered = {row["symbol"] for row in self.repo.status(command) if row["succeeded_at"]}
-            if symbols and not set(symbols).issubset(covered):
-                text += "\n" + self.queue(command, symbols)
-            return text
+                symbols = None
+            return self.queue(command, symbols)
         if command == "briefing":
             if len(args) > 1:
                 raise ValueError("Usage: /briefing [now|HH:MM|on|off]")
@@ -137,7 +209,8 @@ class Insights:
             settings = self.store.settings()
             return (
                 f"Briefing {settings['briefing_enabled']} • {settings['briefing_time']} ({settings['timezone']}) "
-                "on verified US trading days before market open. "
+                "on the local date of each verified US session open, before market open. "
+                "Change travel timezone with /set timezone AREA/CITY. "
                 "An enabled briefing refreshes all sections, including those with standalone automation off. "
                 "/briefing now requests a manual digest."
             )
@@ -155,12 +228,23 @@ class Insights:
                 f"{kind}: {settings[kind + '_enabled']} • {stamp} • source issues {failures}"
             )
         with self.store.connection() as db:
-            pending = db.execute(
-                "SELECT COUNT(*) FROM signal_jobs WHERE status IN ('pending','running')"
-            ).fetchone()[0]
+            jobs = db.execute(
+                "SELECT id,kind,status,symbols FROM signal_jobs WHERE status IN ('pending','running') ORDER BY id"
+            ).fetchall()
+        pending = sum(row[2] == "pending" for row in jobs)
+        running = sum(row[2] == "running" for row in jobs)
         lines.append(
-            f"Queued refreshes: {pending} • {self.store.state('insights_error') or 'worker ready'}"
+            f"Queued refreshes: {pending} • running: {running} • {self.store.state('insights_error') or 'worker ready'}"
         )
+        for job, kind, status, encoded in jobs[:3]:
+            payload = json.loads(encoded)
+            total, remaining = len(payload["all"]), len(payload["remaining"])
+            current = (
+                ", checking " + payload["remaining"][0] if status == "running" and remaining else ""
+            )
+            lines.append(
+                f"{kind.capitalize()} #{job}: {total - remaining}/{total} checked{current}"
+            )
         return "\n".join(lines)
 
     @staticmethod
@@ -177,11 +261,13 @@ class Insights:
         stamp = datetime.fromtimestamp(now, ZoneInfo(settings["timezone"])).isoformat(
             timespec="seconds"
         )
-        lines = [f"🗞 trabe briefing • {stamp}"]
+        lines = [f"🗞 trabe briefing • {stamp} ({settings['timezone']})"]
         try:
-            lines.append("US market: " + USCalendar().describe(now))
+            lines.append("US market: " + USCalendar().describe(now, settings["timezone"]))
         except ValueError:
             lines.append("US market: calendar unavailable/expired")
+        lines.extend(("", *self.market_context().briefing(symbols, now=now)))
+        lines.extend(("", *self.market_news().briefing(now=now)))
         portfolio = Portfolio(self.store, self.monitor)
         currency, _, rows = portfolio.calculate(now=now)
         total = sum((r["value"] for r in rows if r["value"] is not None), Decimal(0))
@@ -238,9 +324,10 @@ class Insights:
                 lines.append(
                     "Some source requests failed; retained data may be stale. Use the section command for details."
                 )
-        lines.append(
-            "\nPrices and summaries describe received data; local sentiment is heuristic. Source times and gaps matter."
-        )
+        lines.append("\nCached observations; local sentiment is heuristic.")
+        from trabe.snapshots import SnapshotService
+
+        lines.append(SnapshotService(self.store).status())
         return self.bounded("\n".join(lines))
 
     def _coherent(self, db, settings, symbols, watermarks):
@@ -252,7 +339,7 @@ class Insights:
             return False
         current = dict(
             db.execute(
-                "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','insights_resumed_at','pause_until')"
+                "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','earnings_enabled_at','insights_resumed_at','pause_until')"
             )
         )
         return current == watermarks
@@ -264,7 +351,7 @@ class Insights:
         with self.store.connection() as db:
             watermarks = dict(
                 db.execute(
-                    "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','insights_resumed_at','pause_until')"
+                    "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','earnings_enabled_at','insights_resumed_at','pause_until')"
                 )
             )
         for key, message in self.feature(kind).alerts(symbols, now=now):
@@ -282,18 +369,20 @@ class Insights:
         settings = self.store.settings()
         if settings["briefing_enabled"] != "on" or self.store.automation_paused(now):
             return
-        local = datetime.fromtimestamp(now, ZoneInfo(settings["timezone"]))
-        day = local.date().isoformat()
-        if local.strftime("%H:%M") < settings["briefing_time"]:
-            return
         try:
-            session = USCalendar().session(local.date())
-            if session is None or now >= session.opens:
+            session = USCalendar().next_session(now)
+            zone = ZoneInfo(settings["timezone"])
+            local_day = datetime.fromtimestamp(session.opens, zone).date()
+            scheduled = datetime.combine(
+                local_day, datetime.strptime(settings["briefing_time"], "%H:%M").time(), zone
+            ).timestamp()
+            if not scheduled <= now < session.opens:
                 return
         except ValueError:
             self.store.set_state("insights_error", "Briefing suspended: exchange calendar expired.")
             return
-        key = "daily:" + day
+        # Claims follow the exchange session even across local midnight or travel.
+        key = "daily:" + session.day
         if self.repo.notified("briefing", key):
             return
         missing = any(
@@ -302,7 +391,7 @@ class Insights:
             )
             for kind in FEATURES
         )
-        waiting_key = "briefing_wait_" + day
+        waiting_key = "briefing_wait_" + session.day
         began = float(self.store.state(waiting_key, "0"))
         if missing and (not began or now - began < 300):
             if not began:
@@ -313,7 +402,7 @@ class Insights:
         with self.store.connection() as db:
             watermarks = dict(
                 db.execute(
-                    "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','insights_resumed_at','pause_until')"
+                    "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','earnings_enabled_at','insights_resumed_at','pause_until')"
                 )
             )
         if self.repo.notify_once(
@@ -346,18 +435,67 @@ class Insights:
             db.execute("UPDATE signal_jobs SET status='running' WHERE id=?", (row[0],))
         job, kind, encoded = row
         payload = json.loads(encoded)
-        batch, remaining = payload["remaining"][:5], payload["remaining"][5:]
+        automatic = payload.get("origin") == "automatic"
+        gate = payload.get("gate")
+        deadline = payload.get("deadline")
+
+        def cancelled():
+            current = self.store.settings()
+            return automatic and (
+                self.store.automation_paused()
+                or self.store.state("storage_paused")
+                or current.get(str(gate) + "_enabled") != "on"
+                or (deadline is not None and time.time() >= deadline)
+                or any(current.get(k) != v for k, v in payload.get("settings", {}).items())
+            )
+
+        if cancelled():
+            with self.store.connection() as db:
+                db.execute("UPDATE signal_jobs SET status='cancelled' WHERE id=?", (job,))
+            return True
+        if automatic:
+            covered = Ledger(self.store).coverage()
+            payload["remaining"] = [s for s in payload["remaining"] if s in covered]
+        batch_size = 1 if kind in {"news", "briefing"} else 5
+        batch, remaining = payload["remaining"][:batch_size], payload["remaining"][batch_size:]
         try:
+            if kind == "briefing":
+                if payload["remaining"] == payload["all"]:
+                    self.market_news(automatic=automatic).refresh(
+                        now=time.time(), force=not automatic
+                    )
+                self.market_context(automatic=automatic).refresh(
+                    batch,
+                    now=time.time(),
+                    force=not automatic,
+                    include_market=payload["remaining"] == payload["all"],
+                )
             for feature in FEATURES if kind == "briefing" else (kind,):
-                self.feature(feature).refresh(batch, now=time.time(), force=True)
+                self.feature(
+                    feature,
+                    automatic=automatic,
+                    context=gate,
+                    deadline=deadline,
+                    guard_settings=payload.get("settings", {}),
+                ).refresh(batch, now=time.time(), force=not automatic)
+            if cancelled():
+                raise WorkStopped("Automatic preparation cancelled.")
             if remaining:
                 payload["remaining"] = remaining
                 with self.store.connection() as db:
                     db.execute(
-                        "UPDATE signal_jobs SET status='pending',symbols=? WHERE id=?",
+                        "UPDATE signal_jobs SET status='pending',symbols=? WHERE id=? AND status='running'",
                         (json.dumps(payload), job),
                     )
             else:
+                payload["remaining"] = []
+                if automatic:
+                    with self.store.connection() as db:
+                        db.execute(
+                            "UPDATE signal_jobs SET status='completed',symbols=? WHERE id=? AND status='running'",
+                            (json.dumps(payload), job),
+                        )
+                    return True
                 text = (
                     self.render_briefing(payload["all"], time.time())
                     if kind == "briefing"
@@ -366,19 +504,26 @@ class Insights:
                 with self.store.connection() as db:
                     db.execute("BEGIN IMMEDIATE")
                     self.outbox.send(self.config.owner_id, self.bounded(text), db=db)
-                    db.execute("UPDATE signal_jobs SET status='completed' WHERE id=?", (job,))
+                    db.execute(
+                        "UPDATE signal_jobs SET status='completed',symbols=? WHERE id=?",
+                        (json.dumps(payload), job),
+                    )
         except WorkStopped:
             with self.store.connection() as db:
-                db.execute("UPDATE signal_jobs SET status='pending' WHERE id=?", (job,))
+                db.execute(
+                    "UPDATE signal_jobs SET status=? WHERE id=?",
+                    ("cancelled" if automatic else "pending", job),
+                )
         except Exception:
             logger.warning("Manual signal refresh failed; cached data retained.")
             with self.store.connection() as db:
                 db.execute("BEGIN IMMEDIATE")
-                self.outbox.send(
-                    self.config.owner_id,
-                    f"{kind.capitalize()} refresh was incomplete. Cached data is retained; check /status and retry.",
-                    db=db,
-                )
+                if not automatic:
+                    self.outbox.send(
+                        self.config.owner_id,
+                        f"{kind.capitalize()} refresh was incomplete. Cached data is retained; check /status and retry.",
+                        db=db,
+                    )
                 db.execute("UPDATE signal_jobs SET status='failed' WHERE id=?", (job,))
         return True
 
@@ -394,6 +539,17 @@ class Insights:
         symbols = sorted(held) + sorted(Ledger(self.store).coverage() - held)
         if not symbols:
             return False
+        if settings["briefing_enabled"] == "on":
+            offset = int(self.store.state("signal_cursor_market-context", "0")) % len(symbols)
+            try:
+                self.market_news(automatic=True).refresh(now=now if fixed_time else time.time())
+                self.market_context(automatic=True).refresh(
+                    [symbols[offset]], now=now if fixed_time else time.time()
+                )
+            except WorkStopped:
+                if self.stop.is_set() or self.store.automation_paused():
+                    raise
+            self.store.set_state("signal_cursor_market-context", str((offset + 1) % len(symbols)))
         for kind in FEATURES:
             own = settings[kind + "_enabled"] == "on"
             if not own and settings["briefing_enabled"] != "on":

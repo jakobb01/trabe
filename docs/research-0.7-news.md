@@ -4,6 +4,12 @@ Researched 2026-11-03/04. This is the implementation recommendation, based on
 official client contracts and read-only live requests. No new account, paid AI
 key, Telegram poller or Pi change is required.
 
+Follow-up: [additional feeds and second sentiment assessments](research-news-providers.md)
+updates the next-stage recommendation. Keep the deployed Finnhub/Yahoo baseline;
+plan Massive first and optional Marketaux, with separate provider observations,
+cross-feed grouping and visible score disagreements. Their free-account access
+has not been live-tested. This does not change the 0.7 evidence below.
+
 ## Selected sources and actual entitlement
 
 | Source | Observed result | Decision |

@@ -18,7 +18,7 @@ from trabe.maintenance import Maintenance
 from trabe.news import News
 from trabe.signals import SignalStore
 from trabe.snapshots import SnapshotService
-from trabe.store import Store
+from trabe.store import SCHEMA_VERSION, Store
 
 
 def stamp(value):
@@ -216,7 +216,7 @@ class AdvisorTests(unittest.TestCase):
         Store(self.store.path)
         self.assertEqual(self.advisor.get("VST"), packet)
         with self.store.connection() as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 9)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         Maintenance(self.store, 123).expire(stamp("2027-03-01T12:00:00+00:00"))
         self.assertIsNone(self.advisor.get("VST"))
         self.assertEqual(Ledger(self.store).positions("USD")["VST"][0], 2)

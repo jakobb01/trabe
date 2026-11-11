@@ -11,7 +11,7 @@ from trabe.news import News
 from trabe.news_analysis import RulesAnalyzer
 from trabe.news_quality import context
 from trabe.news_sources import vendor_score
-from trabe.store import Store
+from trabe.store import SCHEMA_VERSION, Store
 
 
 class NewsQualityTests(unittest.TestCase):
@@ -224,7 +224,7 @@ class NewsQualityTests(unittest.TestCase):
         self.assertEqual(reopened.state("telegram_offset"), "42")
         self.assertEqual(reopened.watchlist(), [("VST", 2)])
         with reopened.connection() as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
 
     def test_cached_analysis_is_reused_without_backdating_new_occurrences(self):
         from unittest.mock import patch

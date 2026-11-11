@@ -149,30 +149,23 @@ class MarketNews:
 
     def briefing(self, *, now):
         row = self.repo.get("market-news", "latest")
-        lines = ["Market news • selected broad-market drivers"]
+        lines = []
         items = row["payload"]["items"] if row and row["last_seen"] <= now else []
         current = [
             item for item in items if 0 <= now - item["published_at"] <= WINDOW and relevant(item)
         ]
-        for item in current[:3]:
-            label = (
-                "Article extract"
-                if item["input_quality"] == "article"
-                else "Feed extract"
-                if item["snippet"]
-                else "Headline only"
-            )
-            lines.append(f"• {item['headline']} • {News._age(item['published_at'], now)} ago")
-            if item["snippet"]:
-                lines.append(f"{label}: {item['snippet'][:240]}")
-            else:
-                lines.append(label + ".")
-        if not current:
-            lines.append("No recent qualifying market stories cached; coverage may be unavailable.")
-        if row and row["payload"]["source"] == "yahoo-rss":
-            lines.append("Yahoo RSS fallback • selected macro/index headlines.")
-        if row and now - row["last_seen"] > 3 * 3600:
-            lines.append("Market news cache is stale.")
-        if any(s["error"] for s in self.repo.status("market-news")):
-            lines.append("Some market news requests failed/deferred; available stories retained.")
-        return lines
+        for item in current:
+            excerpt = item["snippet"].strip()
+            if not excerpt:
+                continue
+            publisher = item.get("publisher", "")
+            if publisher:
+                suffix = r"\s+(?:[-|—]\s*)?" + re.escape(publisher) + r"\s*$"
+                without_source = re.sub(suffix, "", excerpt, flags=re.I).strip()
+                headline = re.sub(suffix, "", item["headline"], flags=re.I).strip()
+                if without_source.casefold() == headline.casefold():
+                    excerpt = without_source
+            lines.append(f"• {excerpt[:240]} • {News._age(item['published_at'], now)} ago")
+            if len(lines) == 3:
+                break
+        return lines or ["No recent market-news extracts available."]

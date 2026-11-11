@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from trabe.api import ApiError, MarketData
+from trabe.api import ApiError, MarketData, message_chunks
 from trabe.bot import Bot
 from trabe.config import Config
 from trabe.insights import Insights
@@ -310,14 +310,77 @@ class SignalTests(unittest.TestCase):
             message = "\n".join(r[0] for r in db.execute("SELECT text FROM outbox"))
         for expected in (
             "Positions",
-            "Watchlist prices",
             "Earnings",
             "Insider purchases",
-            "News",
-            "heuristic",
+            "/news cached",
+            "/briefing details",
+            "/outlook results",
         ):
             self.assertIn(expected, message)
+        self.assertNotIn("Watchlist prices", message)
         self.assertEqual(self.store.settings()["briefing_enabled"], "off")
+
+    def test_cached_overview_and_details_do_not_queue_or_fetch(self):
+        with (
+            patch("trabe.insights.time.time", return_value=self.now),
+            patch.object(FixtureHTTP, "finnhub", side_effect=AssertionError("network")),
+            patch.object(FixtureHTTP, "json", side_effect=AssertionError("network")),
+        ):
+            overview = self.insights.handle("briefing", ["cached"])
+            details = self.insights.handle("briefing", ["details"])
+        self.assertIn("SPY", overview)
+        self.assertIn("QQQ", overview)
+        self.assertIn("VIX: unavailable", overview)
+        self.assertNotIn("Watchlist prices", overview)
+        self.assertIn("Watchlist prices", details)
+        self.assertIn("VST", details)
+        self.assertIn("News", details)
+        self.assertEqual(len(list(message_chunks(overview))), 1)
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM signal_jobs").fetchone()[0], 0)
+        self.assertEqual(self.box.pending(), 0)
+        self.assertEqual(self.store.settings()["briefing_enabled"], "off")
+
+    def test_overview_keeps_source_failures_with_retained_cards(self):
+        for kind in ("market-news", "earnings", "insiders"):
+            self.repo.fail(kind, "fixture", "*", "Unavailable", self.now)
+        text = self.insights.render_briefing(["VST"], self.now)
+        self.assertIn("Market news refresh failed", text)
+        self.assertIn("Some source requests failed", text)
+        self.assertIn("retained data may be stale", text)
+
+    def test_long_cards_are_omitted_whole_and_details_remain_available(self):
+        card = "VST result " + "📈" * 1800 + " • unverified comparison"
+        with patch("trabe.earnings.Earnings.briefing", return_value=[card]):
+            overview = self.insights.render_briefing(["VST"], self.now)
+            details = self.insights.render_briefing_details(["VST"], self.now)
+        self.assertEqual(len(list(message_chunks(overview))), 1)
+        self.assertNotIn("VST result", overview)
+        self.assertIn("Some sections exceed", overview)
+        self.assertIn("/briefing details", overview)
+        self.assertIn("/outlook results", overview)
+        self.assertIn(card, details)
+
+    def test_overview_labels_stale_and_missing_position_values(self):
+        self.store.set_setting("default_currency", "USD")
+        ledger = Ledger(self.store)
+        ledger.record("VST", "buy", "2", "100", "USD", "2026-11-03")
+        ledger.record("GOOGL", "buy", "1", "100", "USD", "2026-11-03")
+        self.store.save_live(
+            dict(
+                ticker="VST",
+                provider="finnhub",
+                currency="USD",
+                price=120,
+                source_time=self.now - 3600,
+                received_at=self.now - 3600,
+            )
+        )
+        text = self.insights.render_briefing(["VST", "GOOGL"], self.now)
+        self.assertIn("observed value 240.00 USD", text)
+        self.assertIn("unrealized +40.00 USD", text)
+        self.assertIn("partial; missing values excluded", text)
+        self.assertIn("stale position prices", text)
 
     def test_scheduled_briefing_deduplicates_and_skips_holidays(self):
         self.insights.handle("briefing", ["on"])

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from trabe import __version__
 from trabe.api import ApiError, MarketData, Telegram
-from trabe.bot import COMMANDS, MENU, Bot
+from trabe.bot import COMMANDS, REMOVE_KEYBOARD, Bot
 from trabe.config import Config
 from trabe.outbox import Outbox
 from trabe.preferences import validate_setting
@@ -86,11 +86,14 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
         telegram.call(
             "setMyCommands", commands=[{"command": c, "description": d} for c, d in COMMANDS]
         )
+        telegram.call(
+            "setChatMenuButton", chat_id=config.owner_id, menu_button={"type": "commands"}
+        )
         if store.state("startup_notice_version") != __version__:
             outbox.send(
                 config.owner_id,
-                "✅ trabe started. Use the menu below, /status or /help.",
-                reply_markup=MENU,
+                "✅ trabe started. Use the Telegram command menu, /status or /help.",
+                reply_markup=REMOVE_KEYBOARD,
             )
             store.set_state("startup_notice_version", __version__)
         logger.info("Telegram connected; owner-only long polling started.")

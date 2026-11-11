@@ -15,6 +15,7 @@ DEFAULTS = {
     "snapshot_time": "preopen-30m",
     "briefing_enabled": "off",
     "briefing_time": "08:00",
+    "outlook_enabled": "off",
     "earnings_warning_days": "5",
     "insider_min_value_usd": "10000",
     "default_currency": "EUR",
@@ -43,6 +44,7 @@ DESCRIPTIONS = {
     "snapshot_time": "Decision snapshot: preopen-30m or HH:MM in your timezone",
     "briefing_enabled": "Combined trading-day morning briefing: on or off",
     "briefing_time": "Briefing time in your timezone, HH:MM",
+    "outlook_enabled": "Daily SPY/QQQ outlook 30m before US open and later assessment: on or off",
     "earnings_warning_days": "Warn once within 1–14 calendar days before earnings",
     "insider_min_value_usd": "Minimum qualifying insider purchase value in USD, 1000–1000000000",
     "default_currency": "Default currency for trade input and portfolio reporting: EUR or USD",
@@ -95,6 +97,7 @@ def validate_setting(key: str, value: str) -> str:
         "news_second_view",
         "snapshot_enabled",
         "briefing_enabled",
+        "outlook_enabled",
     ):
         if value not in ("on", "off"):
             raise ValueError("Use on or off.")

@@ -164,7 +164,9 @@ class Maintenance:
         return True
 
     def expire(self, now: float):
+        from trabe.advisor import Advisor
         from trabe.news_store import NewsStore
+        from trabe.outlook import OutlookStore
         from trabe.snapshots import SnapshotStore
 
         cutoff = retention_cutoff(datetime.fromtimestamp(now, NY).date())
@@ -173,6 +175,8 @@ class Maintenance:
             db.execute("BEGIN IMMEDIATE")
             NewsStore(self.store).prune(now, db)
             SnapshotStore(self.store).prune(now, db)
+            OutlookStore(self.store).prune(now, db)
+            Advisor(self.store).prune(now, db)
             for table, column in (
                 ("minute_observations", "session_date"),
                 ("daily_summaries", "session_date"),

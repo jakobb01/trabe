@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from trabe.api import ApiError, MarketData, message_chunks
-from trabe.bot import MENU, Bot
+from trabe.bot import COMMANDS, REMOVE_KEYBOARD, Bot
 from trabe.config import Config
 from trabe.outbox import Outbox
 from trabe.preferences import validate_setting
@@ -53,7 +53,7 @@ class FeatureTests(unittest.TestCase):
         self.bot = Bot(self.config, self.store, self.telegram, self.market)
         self.addCleanup(self.bot.scans.close)
 
-    def test_start_installs_a_usable_button_menu(self):
+    def test_start_removes_the_reply_keyboard(self):
         self.bot.handle(
             {
                 "message": {
@@ -63,7 +63,8 @@ class FeatureTests(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(self.telegram.messages[0][2]["reply_markup"], MENU)
+        self.assertEqual(self.telegram.messages[0][2]["reply_markup"], REMOVE_KEYBOARD)
+        self.assertEqual(REMOVE_KEYBOARD, {"remove_keyboard": True})
         self.assertEqual(self.calls, [])
 
     def test_button_is_owner_authorized_before_dispatch(self):
@@ -240,10 +241,10 @@ class FeatureTests(unittest.TestCase):
     def test_outbox_acknowledges_each_chunk_and_does_not_replay_delivered_chunks(self):
         box = Outbox(self.store)
         text = "🚀" * 4000
-        box.send(123, text, reply_markup=MENU)
+        box.send(123, text, reply_markup=REMOVE_KEYBOARD)
         box.flush(self.telegram, limit=1)
         self.assertEqual(box.pending(), 2)
-        self.assertEqual(self.telegram.messages[0][2]["reply_markup"], MENU)
+        self.assertEqual(self.telegram.messages[0][2]["reply_markup"], REMOVE_KEYBOARD)
         Outbox(Store(self.store.path)).flush(self.telegram)
         self.assertEqual("".join(message[1] for message in self.telegram.messages), text)
         self.assertNotIn("reply_markup", self.telegram.messages[-1][2])
@@ -310,8 +311,11 @@ class FeatureTests(unittest.TestCase):
     def test_runtime_restores_signal_handlers_and_clears_health_on_exit(self):
         stop = threading.Event()
 
+        api_calls = []
+
         class Client(FakeTelegram):
             def call(self, method, **kwargs):
+                api_calls.append((method, kwargs))
                 return {"username": "test_bot"} if method == "getMe" else {"url": ""}
 
             def updates(self, offset, **kwargs):
@@ -322,6 +326,16 @@ class FeatureTests(unittest.TestCase):
 
         old = signal.getsignal(signal.SIGTERM)
         run(self.config, telegram=Client(), stop_event=stop)
+        self.assertIn(
+            (
+                "setMyCommands",
+                {"commands": [{"command": c, "description": d} for c, d in COMMANDS]},
+            ),
+            api_calls,
+        )
+        self.assertIn(
+            ("setChatMenuButton", {"chat_id": 123, "menu_button": {"type": "commands"}}), api_calls
+        )
         self.assertIs(signal.getsignal(signal.SIGTERM), old)
         self.assertEqual(self.store.state("heartbeat"), "0")
         self.assertNotEqual(self.store.state("last_poll"), "")

@@ -79,8 +79,9 @@ class MarketNewsTests(unittest.TestCase):
         row = SignalStore(self.store).get("market-news", "latest")
         self.assertEqual(len(row["payload"]["items"]), 1)
         text = "\n".join(self.feature.briefing(now=NOW))
-        self.assertIn("Federal Reserve", text)
-        self.assertIn("Feed extract:", text)
+        self.assertEqual(text, "• Treasury yields fell as investors assessed inflation. • 1m ago")
+        self.assertNotIn("Federal Reserve discusses", text)
+        self.assertNotIn("Reuters", text)
         self.assertNotIn("Amazon", text)
         self.assertNotIn("Best AI", text)
         self.assertEqual(SignalStore(self.store).rows("news"), [])
@@ -92,8 +93,11 @@ class MarketNewsTests(unittest.TestCase):
         self.fail = True
         self.feature.refresh(now=NOW)
         text = "\n".join(self.feature.briefing(now=NOW))
-        self.assertIn("Inflation cools", text)
-        self.assertIn("Yahoo RSS fallback", text)
+        self.assertIn("Consumer prices rose less than expected.", text)
+        self.assertNotIn("Yahoo RSS fallback", text)
+        self.assertEqual(
+            SignalStore(self.store).get("market-news", "latest")["payload"]["source"], "yahoo-rss"
+        )
         self.assertNotIn("Bullish", text)
         self.assertNotIn("private vendor", text)
 
@@ -104,9 +108,11 @@ class MarketNewsTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["input_quality"], "article")
         self.assertEqual(payload["feed_received_at"], NOW)
         self.assertEqual(payload["received_at"], NOW)
-        self.assertIn("Article extract:", "\n".join(self.feature.briefing(now=NOW)))
+        text = "\n".join(self.feature.briefing(now=NOW))
+        self.assertIn("The Federal Reserve discussed interest rates and inflation.", text)
+        self.assertNotIn("Article extract:", text)
 
-    def test_outage_keeps_saved_news_and_old_cache_is_explicit(self):
+    def test_outage_keeps_saved_extract_age_and_failure_provenance(self):
         self.feature.refresh(now=NOW)
 
         def offline(*a, **kw):
@@ -115,9 +121,10 @@ class MarketNewsTests(unittest.TestCase):
         self.http.xml = self.http.finnhub = offline
         self.feature.refresh(now=NOW + 4 * 3600, force=True)
         text = "\n".join(MarketNews(Store(self.store.path), self.http).briefing(now=NOW + 4 * 3600))
-        self.assertIn("Federal Reserve", text)
-        self.assertIn("cache is stale", text)
-        self.assertIn("failed/deferred", text)
+        self.assertIn("Treasury yields fell", text)
+        self.assertIn("4h ago", text)
+        self.assertTrue(any(s["error"] for s in SignalStore(self.store).status("market-news")))
+        self.assertNotIn("failed/deferred", text)
         self.assertNotIn("private network", text)
 
     def test_sources_off_and_cancellation_make_no_hidden_fallback_requests(self):

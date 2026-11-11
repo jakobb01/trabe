@@ -47,23 +47,39 @@ class Insights:
         self.worker = threading.Thread(target=self.run, name="fundamentals", daemon=True)
         self.worker.start()
 
-    def market_context(self, *, automatic=False):
+    def market_context(
+        self, *, automatic=False, context="briefing", deadline=None, guard_settings=None
+    ):
         from trabe.market_context import MarketContext
 
         return MarketContext(
             self.store,
             self.http_factory(
-                self.config, self.store, stop=self.stop, automatic=automatic, feature="briefing"
+                self.config,
+                self.store,
+                stop=self.stop,
+                automatic=automatic,
+                feature=context,
+                deadline=deadline,
+                guard_settings=guard_settings,
             ),
         )
 
-    def market_news(self, *, automatic=False):
+    def market_news(
+        self, *, automatic=False, context="briefing", deadline=None, guard_settings=None
+    ):
         from trabe.market_news import MarketNews
 
         return MarketNews(
             self.store,
             self.http_factory(
-                self.config, self.store, stop=self.stop, automatic=automatic, feature="briefing"
+                self.config,
+                self.store,
+                stop=self.stop,
+                automatic=automatic,
+                feature=context,
+                deadline=deadline,
+                guard_settings=guard_settings,
             ),
         )
 
@@ -74,9 +90,13 @@ class Insights:
             self.worker.join(timeout=5)
 
     def queue(self, kind, symbols=None, *, origin="manual", gate=None, deadline=None, session=None):
-        if kind not in (*FEATURES, "briefing"):
+        if kind not in (*FEATURES, "briefing", "outlook"):
             raise ValueError("Unknown refresh type.")
         selected = sorted(Ledger(self.store).coverage() if symbols is None else set(symbols))
+        if kind == "outlook":
+            from trabe.market_context import BENCHMARKS
+
+            selected = list(BENCHMARKS)
         if not selected:
             return (
                 None
@@ -134,6 +154,63 @@ class Insights:
         return f"{kind.capitalize()} refresh queued for {len(selected)} symbol(s). I'll send the result here."
 
     def handle(self, command, args):
+        if command == "advisor":
+            from trabe.advisor import Advisor
+
+            return Advisor(self.store).handle(args)
+        if command == "outlook":
+            from trabe.outlook import OutlookService
+
+            outlook = OutlookService(self.store)
+            if len(args) > 1:
+                raise ValueError("Usage: /outlook [now|cached|YYYY-MM-DD|results|on|off]")
+            option = args[0].lower() if args else "now"
+            if option in {"on", "off"}:
+                self.store.set_setting("outlook_enabled", option)
+                if option == "off":
+                    with self.store.connection() as db:
+                        db.execute("DELETE FROM outbox WHERE kind='outlook'")
+                        db.execute(
+                            "UPDATE signal_jobs SET status='cancelled' WHERE status IN ('pending','running') AND json_extract(symbols,'$.gate')='outlook'"
+                        )
+                self.wake.set()
+                return outlook.status()
+            if option == "now":
+                from trabe.market_context import target_session
+
+                now = time.time()
+                session = target_session(outlook.calendar, now)
+                if now >= session.opens:
+                    raise ValueError(
+                        "Pre-open issuance has closed; use /outlook cached for the saved expectation."
+                    )
+                with self.store.connection() as db:
+                    recent = db.execute(
+                        "SELECT 1 FROM market_outlooks WHERE kind='manual' AND as_of>?", (now - 60,)
+                    ).fetchone()
+                if recent:
+                    raise ValueError(
+                        "Wait one minute before issuing another outlook; /outlook cached is available."
+                    )
+                return self.queue("outlook")
+            if option == "results":
+                return outlook.results()
+            if option == "cached":
+                packet = outlook.repo.get()
+            else:
+                from datetime import date
+
+                try:
+                    if date.fromisoformat(option).isoformat() != option:
+                        raise ValueError
+                except ValueError:
+                    raise ValueError("Use now, cached, YYYY-MM-DD, results, on or off.") from None
+                packet = outlook.repo.get(session_date=option)
+            return (
+                (outlook.report(packet) if packet else "No saved outlook for this view.")
+                + "\n"
+                + outlook.status()
+            )
         if command == "insider":
             command = "insiders"
         if command in FEATURES:
@@ -192,10 +269,16 @@ class Insights:
             return self.queue(command, symbols)
         if command == "briefing":
             if len(args) > 1:
-                raise ValueError("Usage: /briefing [now|HH:MM|on|off]")
+                raise ValueError("Usage: /briefing [now|cached|details|HH:MM|on|off]")
             option = args[0].lower() if args else ""
             if option == "now":
                 return self.queue("briefing")
+            if option in ("cached", "details"):
+                symbols = sorted(Ledger(self.store).coverage())
+                render = (
+                    self.render_briefing_details if option == "details" else self.render_briefing
+                )
+                return render(symbols, time.time())
             if option in ("on", "off"):
                 self.store.set_setting("briefing_enabled", option)
                 if option == "off":
@@ -212,7 +295,8 @@ class Insights:
                 "on the local date of each verified US session open, before market open. "
                 "Change travel timezone with /set timezone AREA/CITY. "
                 "An enabled briefing refreshes all sections, including those with standalone automation off. "
-                "/briefing now requests a manual digest."
+                "/briefing now refreshes the overview; /briefing cached reads it immediately. "
+                "/briefing details shows the full cached report."
             )
         return None
 
@@ -236,6 +320,9 @@ class Insights:
         lines.append(
             f"Queued refreshes: {pending} • running: {running} • {self.store.state('insights_error') or 'worker ready'}"
         )
+        from trabe.outlook import OutlookService
+
+        lines.append(OutlookService(self.store).status())
         for job, kind, status, encoded in jobs[:3]:
             payload = json.loads(encoded)
             total, remaining = len(payload["all"]), len(payload["remaining"])
@@ -257,6 +344,77 @@ class Insights:
         )
 
     def render_briefing(self, symbols, now):
+        """One-message overview; complete evidence cards remain in the cached details."""
+        from trabe.outlook import OutlookService
+
+        settings = self.store.settings()
+        stamp = datetime.fromtimestamp(now, ZoneInfo(settings["timezone"])).strftime(
+            "%d %b %H:%M %Z"
+        )
+        try:
+            market = USCalendar().describe(now, settings["timezone"])
+        except ValueError:
+            market = "calendar unavailable/expired"
+        sections = [
+            f"🗞 trabe briefing • {stamp} ({settings['timezone']})\nUS market: {market}",
+            "\n".join(self.market_context().briefing([], now=now)),
+            OutlookService(self.store).briefing(now),
+        ]
+        currency, _, rows = Portfolio(self.store, self.monitor).calculate(now=now)
+        total = sum((r["value"] for r in rows if r["value"] is not None), Decimal(0))
+        profit = sum((r["profit"] for r in rows if r["profit"] is not None), Decimal(0))
+        partial = any(r["value"] is None or r["profit"] is None for r in rows)
+        stale = any(
+            r["quote"] and now - r["quote"]["source_time"] > int(settings["max_source_age_seconds"])
+            for r in rows
+        )
+        sections.append(
+            f"Positions: {len(rows)} open • observed value {total:.2f} {currency} "
+            f"• unrealized {profit:+.2f} {currency}"
+            + (" • partial; missing values excluded" if partial else "")
+            + (" • stale position prices; see /portfolio" if stale else "")
+        )
+        news = self.market_news().briefing(now=now)
+        statuses = self.repo.status("market-news")
+        if not statuses:
+            news.append("Market news not refreshed; coverage unverified.")
+        elif any(s["error"] for s in statuses):
+            news.append("Market news refresh failed; retained extracts may be stale.")
+        sections.append("\n".join(news))
+        for kind, title in (("earnings", "Earnings"), ("insiders", "Insider purchases")):
+            items = self.feature(kind).briefing(symbols, now=now, limit=1)
+            section = title + "\n" + "\n".join(items or ["No eligible cached items."])
+            relevant = [
+                s for s in self.repo.status(kind) if s["symbol"] in symbols or s["symbol"] == "*"
+            ]
+            if not relevant:
+                section += "\nSource not refreshed; coverage unverified."
+            elif any(s["error"] for s in relevant):
+                section += "\nSome source requests failed; retained data may be stale."
+            sections.append(section)
+        footer = (
+            "Cached overview • more items and evidence: /briefing details\n"
+            "Company news: /news cached • holdings: /portfolio\n"
+            "Saved forecast: /outlook cached • assessments: /outlook results"
+        )
+
+        # Telegram counts UTF-16 units. Omit whole sections rather than losing a
+        # source qualifier or half an earnings comparison at the message boundary.
+        def units(text):
+            return len(text.encode("utf-16-le")) // 2
+
+        selected = []
+        omitted = False
+        for section in sections:
+            if units("\n\n".join([*selected, section, footer])) <= 3300:
+                selected.append(section)
+            else:
+                omitted = True
+        if omitted:
+            selected.append("Some sections exceed this overview; read /briefing details.")
+        return "\n\n".join([*selected, footer])
+
+    def render_briefing_details(self, symbols, now):
         settings = self.store.settings()
         stamp = datetime.fromtimestamp(now, ZoneInfo(settings["timezone"])).isoformat(
             timespec="seconds"
@@ -266,6 +424,9 @@ class Insights:
             lines.append("US market: " + USCalendar().describe(now, settings["timezone"]))
         except ValueError:
             lines.append("US market: calendar unavailable/expired")
+        from trabe.outlook import OutlookService
+
+        lines.extend(("", OutlookService(self.store).briefing(now)))
         lines.extend(("", *self.market_context().briefing(symbols, now=now)))
         lines.extend(("", *self.market_news().briefing(now=now)))
         portfolio = Portfolio(self.store, self.monitor)
@@ -428,7 +589,7 @@ class Insights:
         with self.store.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT id,kind,symbols FROM signal_jobs WHERE status='pending' ORDER BY id LIMIT 1"
+                "SELECT id,kind,symbols FROM signal_jobs WHERE status='pending' ORDER BY CASE WHEN kind='outlook' AND json_extract(symbols,'$.origin')='automatic' THEN 0 ELSE 1 END,id LIMIT 1"
             ).fetchone()
             if not row:
                 return False
@@ -459,6 +620,34 @@ class Insights:
         batch_size = 1 if kind in {"news", "briefing"} else 5
         batch, remaining = payload["remaining"][:batch_size], payload["remaining"][batch_size:]
         try:
+            if kind == "outlook":
+                from trabe.outlook import OutlookService
+
+                outlook = OutlookService(self.store)
+                existing = outlook.repo.get(request_key=f"job:{job}") if not automatic else None
+                if existing:
+                    with self.store.connection() as db:
+                        db.execute("UPDATE signal_jobs SET status='completed' WHERE id=?", (job,))
+                    return True
+                options = {
+                    "automatic": automatic,
+                    "context": "outlook",
+                    "deadline": deadline,
+                    "guard_settings": payload.get("settings", {}),
+                }
+                self.market_context(**options).refresh([], now=time.time(), force=True)
+                self.market_news(**options).refresh(now=time.time(), force=True)
+                if cancelled():
+                    raise WorkStopped("Outlook preparation cancelled.")
+                if not automatic:
+                    outlook.issue(request_key=f"job:{job}", owner_id=self.config.owner_id)
+                payload["remaining"] = []
+                with self.store.connection() as db:
+                    db.execute(
+                        "UPDATE signal_jobs SET status='completed',symbols=? WHERE id=? AND status='running'",
+                        (json.dumps(payload), job),
+                    )
+                return True
             if kind == "briefing":
                 if payload["remaining"] == payload["all"]:
                     self.market_news(automatic=automatic).refresh(
@@ -535,6 +724,12 @@ class Insights:
         settings = self.store.settings()
         if self.store.automation_paused(now) or self.store.state("storage_paused"):
             return False
+        if settings["outlook_enabled"] == "on":
+            from trabe.outlook import OutlookService
+
+            OutlookService(self.store).evaluate(
+                self.market_context(automatic=True, context="outlook").http, now=now
+            )
         held = Ledger(self.store).held()
         symbols = sorted(held) + sorted(Ledger(self.store).coverage() - held)
         if not symbols:

@@ -8,6 +8,7 @@ from trabe.fx import FX
 from trabe.insights import Insights
 from trabe.maintenance import Maintenance
 from trabe.monitor import Monitor
+from trabe.outlook import OutlookService
 from trabe.portfolio import Portfolio
 from trabe.snapshots import SnapshotService
 
@@ -28,6 +29,7 @@ class Services:
         self.portfolio = Portfolio(store, self.monitor)
         self.insights = Insights(config, store, outbox, self.monitor)
         self.snapshots = SnapshotService(store)
+        self.outlooks = OutlookService(store)
         self.threads = []
 
     def start(self):
@@ -69,6 +71,7 @@ class Services:
             try:
                 self.maintenance.run_once()
                 self.snapshots.schedule(self.insights)
+                self.outlooks.schedule(self.insights)
                 failures = 0
             except Exception:
                 failures += 1

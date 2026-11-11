@@ -4,7 +4,7 @@ set -euo pipefail
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 [[ $(id -u) != 0 ]] || fail 'Run as your regular SSH user, not root.'
 for tool in podman systemctl loginctl tar install flock sha256sum; do
-    command -v "$tool" >/dev/null || fail "Missing $tool. See docs/deployment.md."
+    command -v "$tool" >/dev/null || fail "Missing $tool. See docs/guide.md."
 done
 [[ $(podman info --format '{{.Host.CgroupsVersion}}') == v2 ]] || fail 'Quadlet requires cgroup v2.'
 mode=${1:-native}
@@ -19,7 +19,7 @@ selected_mode=native
 if [[ "$mode" == bundled || -x "$HOME/.local/libexec/stock-agent/quadlet" ]]; then
     selected_mode=bundled
 elif ! "$generator_found"; then
-    [[ "$mode" == auto ]] || fail 'Podman Quadlet generator is missing. Use the app-scoped compatibility mode or a Quadlet-capable Podman installation; see docs/deployment.md.'
+    [[ "$mode" == auto ]] || fail 'Podman Quadlet generator is missing. Use the app-scoped compatibility mode or a Quadlet-capable Podman installation; see docs/guide.md.'
     selected_mode=bundled
 fi
 if [[ "$selected_mode" == bundled ]]; then

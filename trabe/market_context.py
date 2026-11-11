@@ -14,6 +14,15 @@ SOURCE = "yahoo-chart"
 CACHE_SECONDS = 900
 
 
+def chart_url(symbol):
+    return (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        + quote(symbol.replace(".", "-"), safe="")
+        + "?"
+        + urlencode({"range": "5d", "interval": "1m", "includePrePost": "true"})
+    )
+
+
 def number(value):
     if isinstance(value, bool) or value is None:
         raise ValueError("Invalid market observation.")
@@ -155,12 +164,7 @@ class MarketContext:
                 continue
             self.repo.attempt("market-context", SOURCE, symbol, now)
             try:
-                url = (
-                    "https://query1.finance.yahoo.com/v8/finance/chart/"
-                    + quote(symbol.replace(".", "-"), safe="")
-                    + "?"
-                    + urlencode({"range": "5d", "interval": "1m", "includePrePost": "true"})
-                )
+                url = chart_url(symbol)
                 raw = self.http.json(url, provider=SOURCE)
                 received = max(now, getattr(self.http, "received_at", now))
                 value = parse_chart(raw, symbol, received, self.calendar)

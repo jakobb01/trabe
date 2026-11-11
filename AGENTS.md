@@ -1,12 +1,13 @@
 # Working on trabe
 
-At the start of a new conversation, read `docs/project-status.md` for the project
-handoff. Verify the current worktree and relevant deployment evidence before
+At the start of a new conversation, read `.local/docs/project-status.md` for the
+private project handoff when it exists. On a fresh checkout, start with
+`README.md` and `docs/guide.md`. Verify the current worktree and relevant deployment evidence before
 assuming a release is deployed or changes are committed. Update that note after
 meaningful changes so another conversation can continue without this chat history.
 
-Follow the release priorities in `docs/next-features.md` and the testing policy in
-`CONTRIBUTING.md`. Keep changes small and deliver usable Telegram features.
+Follow the priorities in the private handoff (or the roadmap in `docs/guide.md`)
+and the testing policy in `CONTRIBUTING.md`. Keep changes small and deliver usable Telegram features.
 
 - For ordinary code changes, run the relevant unit tests and lint/format checks
   for changed Python files. Preserve basic checks for money arithmetic, owner
@@ -22,3 +23,7 @@ Follow the release priorities in `docs/next-features.md` and the testing policy 
   Avoid duplicate local and Pi validation of the same behavior.
 - Use fixtures for development. Keep only the deployed process polling the real
   Telegram bot; credentials and runtime state stay outside Git.
+
+Keep public documentation in README.md, docs/guide.md and CONTRIBUTING.md.
+Keep session notes, deployment evidence, research and detailed release history
+under ignored `.local/docs/`; do not add a new public file per release.

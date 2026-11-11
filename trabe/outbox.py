@@ -58,7 +58,7 @@ class Outbox:
                 (kind != "reply" and self.store.automation_paused())
                 or (kind == "alert" and self.store.settings()["monitoring"] != "on")
                 or (
-                    kind in ("earnings", "insiders", "news", "briefing")
+                    kind in ("earnings", "insiders", "news", "briefing", "outlook")
                     and self.store.settings().get(kind + "_enabled") != "on"
                 )
             ):

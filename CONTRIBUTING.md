@@ -94,3 +94,14 @@ issue reports.
 Before a commit, inspect `git diff --cached` and `git status --short`. The initial
 source tree does not include the original prototype archive or private deployment
 session notes.
+
+## Documentation
+
+Keep the README short and maintain current behavior, setup, deployment, storage
+and roadmap in [the project guide](docs/guide.md). Update these when a feature
+changes; avoid separate public release reports or task checklists.
+
+Use ignored `.local/docs/project-status.md` for local handoff and priorities.
+Research, incident details, walkthrough logs and historical notes belong under
+`.local/docs/` or elsewhere in `.local/`. These local files are optional on a
+fresh checkout and must not be required by tests, builds or public links.

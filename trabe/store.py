@@ -11,12 +11,14 @@ from pathlib import Path
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 
 class Store(MarketStorage):
     def __init__(self, path: Path):
+        from trabe.advisor import ADVISOR_SCHEMA
         from trabe.news_store import NEWS_SCHEMA, migrate_legacy
+        from trabe.outlook import OUTLOOK_SCHEMA
         from trabe.signals import SIGNAL_SCHEMA
         from trabe.snapshots import SNAPSHOT_SCHEMA
 
@@ -74,7 +76,7 @@ class Store(MarketStorage):
             if version < 6:
                 migrate_legacy(db)
                 db.execute("PRAGMA user_version=6")
-            for statement in SNAPSHOT_SCHEMA:
+            for statement in (*SNAPSHOT_SCHEMA, *OUTLOOK_SCHEMA, *ADVISOR_SCHEMA):
                 db.execute(statement)
             trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
             for column in ("fx_from", "fx_to"):

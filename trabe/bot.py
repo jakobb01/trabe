@@ -25,8 +25,10 @@ COMMANDS = [
     ("insiders", "Qualifying insider purchases and filing sources"),
     ("news", "Refresh company news and labelled sentiment"),
     ("snapshot", "Save or inspect immutable daily decision inputs"),
-    ("briefing", "Daily digest: now, HH:MM, on or off"),
-    ("menu", "Open the control menu"),
+    ("briefing", "Daily overview: now, cached, details, HH:MM, on/off"),
+    ("outlook", "Pre-open SPY/QQQ outlook and saved results"),
+    ("advisor", "Five-session company research and saved evidence"),
+    ("menu", "Show command help"),
     ("help", "Show available commands"),
     ("status", "Service health and API budget"),
     ("watchlist", "Show watched symbols"),
@@ -60,22 +62,7 @@ COMMANDS = [
     ("storage", "Storage and retention health"),
 ]
 
-MENU = {
-    "keyboard": [
-        ["Status", "Watchlist"],
-        ["Cached prices", "Scan watchlist"],
-        ["Settings", "Help"],
-        ["Portfolio", "Currency"],
-        ["Earnings", "Insiders"],
-        ["News", "Briefing"],
-        ["Monitor on", "Monitor off"],
-        ["Alerts", "Storage"],
-        ["Pause 24h", "Resume"],
-    ],
-    "resize_keyboard": True,
-    "is_persistent": True,
-    "input_field_placeholder": "Choose an action, or type /help",
-}
+REMOVE_KEYBOARD = {"remove_keyboard": True}
 BUTTONS = {
     "Status": "/status",
     "Watchlist": "/watchlist",
@@ -102,10 +89,12 @@ HELP = """trabe
 /insiders [TICKER|cached [TICKER]|refresh [TICKER]|on|off] — purchases
 /news [TICKER|cached [TICKER]|refresh [TICKER]|on|off|sources] — company news
 /snapshot [latest|now|YYYY-MM-DD|on|off] — frozen decision inputs
-/briefing now|HH:MM|on|off — combined trading-day digest
+/briefing now|cached|details|HH:MM|on|off — overview or full cached digest
+/outlook [now|cached|YYYY-MM-DD|results|on|off] — saved pre-open expectation
+/advisor [TICKER|cached TICKER|evidence TICKER] — saved five-session research
 /set earnings_warning_days 5
 /set insider_min_value_usd 10000
-/menu — show the control buttons
+/menu — show command help
 /status — service health (uses no market API requests)
 /test — confirm Telegram delivery
 /watchlist — show your watchlist
@@ -141,7 +130,7 @@ HELP = """trabe
 /set dip_threshold_percent -4
 
 Settings and watchlist survive restarts. Symbol syntax is checked on /add; availability is checked on /quote.
-Prices show their source and source timestamp. Alpha Vantage is end-of-day; Finnhub supplies the intraday feed. New automation starts off. News summaries are extractive; sentiment is a labelled local heuristic. The daily predictor is a later release."""
+Prices show their source and source timestamp. Alpha Vantage is end-of-day; Finnhub supplies the intraday feed. New automation starts off. News summaries are extractive; sentiment is a labelled local heuristic. Saved market outlooks and company research use unvalidated rules."""
 
 
 def symbol(value: str) -> str:
@@ -201,7 +190,7 @@ class Bot:
             return
         text = BUTTONS.get(text, text)
         if not text.startswith("/"):
-            self.telegram.send(self.config.owner_id, "Choose a control button or use /help.")
+            self.telegram.send(self.config.owner_id, "Use the Telegram command menu or /help.")
             return
         parts = text.split()
         command, _, target = parts[0][1:].partition("@")
@@ -215,7 +204,7 @@ class Bot:
             if command.lower() in ("buy", "sell"):
                 reply += "\nExample: /buy GOOGL 5 100 EUR 2026-11-03 fee=1"
         if command.lower() in ("start", "help", "menu"):
-            self.telegram.send(self.config.owner_id, reply, reply_markup=MENU)
+            self.telegram.send(self.config.owner_id, reply, reply_markup=REMOVE_KEYBOARD)
         else:
             self.telegram.send(self.config.owner_id, reply)
 
@@ -496,7 +485,13 @@ class Bot:
             key, value = args
             if key == "snapshot_enabled":
                 return SnapshotService(self.store).handle([value])
-            if key in ("earnings_enabled", "insiders_enabled", "news_enabled", "briefing_enabled"):
+            if key in (
+                "earnings_enabled",
+                "insiders_enabled",
+                "news_enabled",
+                "briefing_enabled",
+                "outlook_enabled",
+            ):
                 return self.insights.handle(key.removesuffix("_enabled"), [value])
             if key == "briefing_time":
                 self.store.set_setting(key, value)

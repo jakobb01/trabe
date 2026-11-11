@@ -10,6 +10,7 @@
 # Local runtime state, tools and development metadata
 /data/
 /logs/
+# Includes private docs, handoff, archives and commit-message drafts
 /.local/
 /.agents/
 /.codex/

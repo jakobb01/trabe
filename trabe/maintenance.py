@@ -167,6 +167,8 @@ class Maintenance:
         from trabe.advisor import Advisor
         from trabe.news_store import NewsStore
         from trabe.outlook import OutlookStore
+        from trabe.paper import Paper
+        from trabe.price_endpoints import EndpointStore
         from trabe.snapshots import SnapshotStore
 
         cutoff = retention_cutoff(datetime.fromtimestamp(now, NY).date())
@@ -177,6 +179,9 @@ class Maintenance:
             SnapshotStore(self.store).prune(now, db)
             OutlookStore(self.store).prune(now, db)
             Advisor(self.store).prune(now, db)
+            if not self.store.state("storage_paused"):
+                Paper(self.store).prune(now, db)
+            EndpointStore(self.store).prune(now, db)
             for table, column in (
                 ("minute_observations", "session_date"),
                 ("daily_summaries", "session_date"),

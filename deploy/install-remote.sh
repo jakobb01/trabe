@@ -24,8 +24,22 @@ flock -n 9 || { printf '%s\n' 'Another stock-agent deployment is in progress.' >
 
 release=$(cd "$source_dir" && { sha256sum Containerfile; find trabe deploy/runtime -type f -print0 | sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
 image="localhost/stock-agent:build-$release"
-# The Pi builds its own architecture; no registry account or exposed build daemon.
-podman build --format=docker --pull=missing -t "$image" -f "$source_dir/Containerfile" "$source_dir"
+# Reuse only the exact content-addressed release on retries.
+if podman image exists "$image"; then
+    printf 'Reusing existing image: %s\n' "$image"
+else
+    graph_root=$(podman info --format '{{.Store.GraphRoot}}')
+    available_kib=$(df -Pk -- "$graph_root" | awk 'NR==2 {print $4}')
+    [[ "$available_kib" =~ ^[0-9]+$ ]] || { printf '%s\n' 'Could not determine container-storage free space.' >&2; exit 1; }
+    if ((available_kib < 1048576)); then
+        printf 'Image build needs at least 1024 MiB free in container storage; only %s MiB available.\n' "$((available_kib / 1024))" >&2
+        printf '%s\n' 'Free obsolete application images before retrying. The running service is unchanged.' >&2
+        exit 1
+    fi
+    # The Pi builds its own architecture. VFS copies whole root filesystems for
+    # cached intermediate layers; avoid retaining a copy for every COPY/metadata step.
+    podman build --layers=false --format=docker --pull=missing -t "$image" -f "$source_dir/Containerfile" "$source_dir"
+fi
 
 # Use SQLite's online backup API before replacing a running release. This also
 # works with the original image, without depending on a new application command.

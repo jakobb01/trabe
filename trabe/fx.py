@@ -11,12 +11,13 @@ from trabe.ledger import Ledger
 
 
 class FX:
-    def __init__(self, store, opener=urlopen):
+    def __init__(self, store, opener=urlopen, *, clock=time.time):
         self.store = store
         self.opener = opener
+        self.clock = clock
 
     def fetch(self, day, now=None):
-        now = time.time() if now is None else now
+        now = self.clock() if now is None else now
         # Historical rates are final only after the requested UTC day has ended.
         end_of_day = datetime.combine(
             date.fromisoformat(day) + timedelta(days=1), datetime.min.time(), UTC
@@ -40,11 +41,13 @@ class FX:
             request = Request(url, headers={"User-Agent": "trabe/0.4"})
             with self.opener(request, timeout=10) as response:
                 payload = json.loads(response.read(65536), parse_float=Decimal)
+            received_at = self.clock()
             rate = Decimal(str(payload["rates"]["USD"]))
             effective = date.fromisoformat(payload["date"])
             requested = date.fromisoformat(day)
             if (
                 payload["base"] != "EUR"
+                or isinstance(payload["rates"]["USD"], bool)
                 or not rate.is_finite()
                 or rate <= 0
                 or not 0 <= (requested - effective).days <= 7
@@ -53,13 +56,21 @@ class FX:
         except (OSError, URLError, ValueError, KeyError, TypeError, InvalidOperation):
             return
         with self.store.connection() as db:
+            from trabe.paper_store import PaperStore
+
+            db.execute("BEGIN IMMEDIATE")
+            if self.store.automation_paused(received_at) or self.store.state("storage_paused"):
+                return
             db.execute(
                 "INSERT OR REPLACE INTO fx_cache VALUES (?,?,?,?,?)",
-                (day, str(rate), effective.isoformat(), "Frankfurter/ECB", now),
+                (day, str(rate), effective.isoformat(), "Frankfurter/ECB", received_at),
+            )
+            PaperStore.observe_fx(
+                db, day, rate, effective.isoformat(), "Frankfurter/ECB", received_at
             )
 
     def refresh(self, now=None):
-        now = time.time() if now is None else now
+        now = self.clock() if now is None else now
         today = datetime.fromtimestamp(now, UTC).date().isoformat()
         with self.store.connection() as db:
             days = [
@@ -73,9 +84,10 @@ class FX:
                     (today, now - 3600),
                 )
             ]
-        requested = ([today] if Ledger(self.store).held() else []) + days
+        paper_enabled = self.store.settings()["paper_enabled"] == "on"
+        requested = ([today] if Ledger(self.store).held() or paper_enabled else []) + days
         for day in requested:
-            if self.store.automation_paused():
+            if self.store.automation_paused() or self.store.state("storage_paused"):
                 break
             self.fetch(day, now)
         with self.store.connection() as db:

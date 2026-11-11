@@ -35,6 +35,18 @@ def number(value):
     return result
 
 
+def split_actions(row, received):
+    events = row.get("events", {})
+    splits = events.get("splits", {})
+    if not isinstance(splits, dict) or len(splits) > 128:
+        raise ValueError("Invalid corporate-action metadata.")
+    return [
+        {"kind": "split", "at": float(number(v["date"]))}
+        for v in splits.values()
+        if float(number(v["date"])) <= received
+    ]
+
+
 def timestamp(value, received):
     result = float(number(value))
     if result > received + 2:
@@ -80,6 +92,10 @@ def parse_chart(raw, symbol, received, calendar):
     session = target_session(calendar, received)
     value = {
         "symbol": symbol,
+        "provider_symbol": provider_symbol,
+        "instrument_type": meta.get("instrumentType"),
+        "timezone": meta.get("exchangeTimezoneName"),
+        "actions": split_actions(row, received),
         "currency": "points" if index else "USD",
         "regular_price": str(number(meta["regularMarketPrice"])),
         "regular_time": regular_time,
@@ -164,7 +180,7 @@ class MarketContext:
                 continue
             self.repo.attempt("market-context", SOURCE, symbol, now)
             try:
-                url = chart_url(symbol)
+                url = chart_url(symbol) + "&events=div%2Csplits"
                 raw = self.http.json(url, provider=SOURCE)
                 received = max(now, getattr(self.http, "received_at", now))
                 value = parse_chart(raw, symbol, received, self.calendar)

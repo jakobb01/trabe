@@ -8,6 +8,7 @@ ssh "${ssh_args[@]}" "$ssh_target" '
     uname -sm
     cat /etc/os-release
     podman --version
+    df -h / "$(podman info --format '\''{{.Store.GraphRoot}}'\'')"
     podman info --format "architecture={{.Host.Arch}} cgroups={{.Host.CgroupsVersion}}"
     apt-cache policy podman
     dpkg-query -W podman uidmap dbus-user-session 2>/dev/null || true

@@ -70,8 +70,8 @@ class Advisor:
             "DELETE FROM company_advice WHERE session_date<=? AND target_close<?", (cutoff, now)
         )
 
-    def _inputs(self, db, ticker, now, first):
-        settings = self.store.settings(db)
+    def evidence_inputs(self, db, ticker, now, first, *, settings=None):
+        settings = self.store.settings(db) if settings is None else settings
         snapshots = SnapshotService(self.store, self.calendar)
         groups = group_events(NewsStore(self.store).records(ticker, now, db), ticker, now)
         groups.sort(key=lambda g: g["published_at"], reverse=True)
@@ -87,14 +87,6 @@ class Advisor:
             stories.append(item)
             if len(stories) == 5:
                 break
-        positions = Ledger(self.store).positions(settings["default_currency"], db)
-        quantity = positions.get(ticker, (Decimal(0),))[0]
-        price = snapshots._price(
-            self.store.cached_live("finnhub", ticker, db),
-            now,
-            "research_reference",
-            max_age=int(settings["max_source_age_seconds"]),
-        )
         outlook = OutlookStore(self.store).get(session_date=first.day, db=db)
         if outlook and outlook["as_of"] > now:
             outlook = None
@@ -107,8 +99,6 @@ class Advisor:
                 for key in ("max_source_age_seconds", "insider_min_value_usd", "news_sources")
             },
             "news_sources": snapshots._news_sources(db, ticker, now, settings),
-            "price": price,
-            "position_quantity": str(quantity),
             "earnings": snapshots._facts(db, ticker, "earnings", now, settings),
             "insiders": snapshots._facts(db, ticker, "insiders", now, settings),
             "fundamental_sources": [
@@ -124,6 +114,19 @@ class Advisor:
             if outlook
             else None,
         }
+
+    def _inputs(self, db, ticker, now, first):
+        inputs = self.evidence_inputs(db, ticker, now, first)
+        settings = self.store.settings(db)
+        positions = Ledger(self.store).positions(settings["default_currency"], db)
+        inputs["position_quantity"] = str(positions.get(ticker, (Decimal(0),))[0])
+        inputs["price"] = SnapshotService(self.store, self.calendar)._price(
+            self.store.cached_live("finnhub", ticker, db),
+            now,
+            "research_reference",
+            max_age=int(settings["max_source_age_seconds"]),
+        )
+        return inputs
 
     @staticmethod
     def infer(inputs, now, last):
@@ -322,14 +325,42 @@ class Advisor:
         return "\n".join(lines)
 
     def handle(self, args):
+        from trabe.advisor_results import AdvisorResults, record_id
         from trabe.bot import symbol
 
+        results = AdvisorResults(self.store, self.calendar)
+        option = args[0].lower() if args else ""
+        if option == "results" and len(args) in (1, 2):
+            return results.results(symbol(args[1]) if len(args) == 2 else None)
+        if option == "result" and len(args) == 2:
+            return results.results(advice_id=args[1])
+        if option == "record" and len(args) == 2:
+            with self.store.connection() as db:
+                packet = results.unpack(
+                    db.execute(
+                        "SELECT payload,sha256 FROM company_advice WHERE id=?",
+                        (record_id(args[1]),),
+                    ).fetchone()
+                )
+            if not packet:
+                raise ValueError("Unknown saved advisor record ID.")
+            return self.report(packet, details=True)
+        if option == "track" and len(args) == 2 and args[1] in ("on", "off"):
+            self.store.set_setting("advisor_results_enabled", args[1])
+            return results.status()
+        if option in {"results", "result", "record", "track", "cached", "evidence"} and not (
+            len(args) == 2 and option in {"cached", "evidence"}
+        ):
+            raise ValueError(
+                "Usage: /advisor results [TICKER] | result ID | record ID | track on|off | cached TICKER | evidence TICKER"
+            )
         if not args:
             return (
                 "/advisor TICKER saves a five-session research suggestion from cached inputs. "
                 "One immutable suggestion per ticker/first target session; refresh /news TICKER before issuing if needed. "
                 "/advisor cached TICKER reads it; /advisor evidence TICKER shows sources. "
-                "No automatic advice or paper trades. Records retained three calendar months (256 maximum)."
+                "/advisor results [TICKER] and result ID read outcomes; record ID reads the original. "
+                "/advisor track on|off controls silent collection. Records retained three calendar months (256 maximum)."
             )
         if len(args) == 1:
             return self.report(self.issue(symbol(args[0])))

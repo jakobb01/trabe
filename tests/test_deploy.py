@@ -42,7 +42,8 @@ p=Path(os.environ['DEPLOY_TEST_STATE'])
 args=sys.argv[1:]
 with (p/'calls').open('a') as f:f.write('podman '+' '.join(args)+'\\n')
 if args[:2]==['image','exists']:
- sys.exit(0 if (p/'has_previous').exists() else 1)
+ sys.exit(0 if (p/('has_build' if ':build-' in args[-1] else 'has_previous')).exists() else 1)
+if args[:2]==['info','--format']:print(p)
 if args[:2]==['container','exists']:
  sys.exit(0 if (p/'has_previous').exists() else 1)
 if args[0]=='inspect':print('true')
@@ -57,6 +58,17 @@ if args[0]=='build' and (p/'fail_build').exists():sys.exit(1)
 if args[0]=='tag' and args[-1].endswith(':current'):
  (p/'current_image').write_text(args[1])
 if 'doctor' in args and (p/'fail_smoke').exists():sys.exit(1)
+""",
+        )
+        self.write_command(
+            "df",
+            """#!/usr/bin/env python3
+import os
+from pathlib import Path
+p=Path(os.environ['DEPLOY_TEST_STATE'])
+available=(p/'available_kib').read_text().strip() if (p/'available_kib').exists() else '8388608'
+print('Filesystem 1024-blocks Used Available Capacity Mounted on')
+print('testfs 16777216 1 '+available+' 1% /test')
 """,
         )
         self.write_command(
@@ -195,6 +207,33 @@ print('Captured service diagnostic')
             (self.account / ".config/stock-agent/agent.env").read_text(), "OLD_CREDENTIALS\n"
         )
         self.assertNotIn("systemctl", (self.path / "calls").read_text())
+
+    def test_low_disk_space_stops_before_build_or_service_changes(self):
+        self.old_deployment()
+        (self.path / "available_kib").write_text("524288")
+        result = self.run_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("at least 1024 MiB", result.stderr)
+        calls = (self.path / "calls").read_text()
+        self.assertNotIn("podman build", calls)
+        self.assertNotIn("systemctl", calls)
+        self.assertEqual(
+            (self.account / ".config/stock-agent/agent.env").read_text(), "OLD_CREDENTIALS\n"
+        )
+
+    def test_exact_cached_image_is_reused_even_below_build_space_reserve(self):
+        self.old_deployment()
+        (self.path / "has_build").touch()
+        (self.path / "available_kib").write_text("524288")
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Reusing existing image", result.stdout)
+        self.assertNotIn("podman build", (self.path / "calls").read_text())
+
+    def test_build_does_not_retain_intermediate_vfs_layers(self):
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("podman build --layers=false", (self.path / "calls").read_text())
 
     def test_failed_backup_preserves_running_release(self):
         self.old_deployment()

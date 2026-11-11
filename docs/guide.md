@@ -140,12 +140,96 @@ the horizon defer bullish additions to waiting for earnings. Missing fundamental
 coverage, insider context and the saved first-session market outlook remain risk
 context. Confidence is uncalibrated; there are no allocations or trade orders.
 
-**Company outcome scoring and paper trading are not implemented yet.** The frozen
-assessment contract specifies first regular-minute open to fifth-session last
-regular-minute close, a ±1% flat band and same-window SPY comparison. Missing
-endpoints and abstentions are unscored. Future collection must preserve opening
-observations before minute history expires. Fees, dividends and simulated fills
-are not part of this price-return contract.
+`/advisor track on|off` controls silent background outcome collection (default
+off). `/advisor results [TICKER]` reports match counts, sample/coverage bounds,
+pending, abstained, unscorable and unsupported records separately. Always-bullish
+and always-mixed baselines use the same eligible cohort; SPY comparisons state
+their smaller paired denominator. `/advisor result ID` inspects one result or
+pending state; `/advisor record ID` reads that exact original forecast. These
+views use saved data and never issue new advice or request prices.
+
+The frozen assessment contract uses first regular-minute open to fifth-session
+last regular-minute close, an inclusive ±1% directional threshold and same-window
+SPY comparison. The collector saves the opening endpoint from open +5 minutes,
+and the closing endpoint from close +30 minutes. It makes at most two requests
+per pass, sharing a 12/hour collector allowance with paper trading inside Yahoo's
+existing budgets. Failed endpoints retry no sooner than hourly, until seven
+calendar days after their respective session closes. Removed watchlist symbols
+remain collectable while their forecasts are retained.
+
+Observations and assessments are immutable and hash-checked. Missing company
+endpoints and abstentions are unscored; missing SPY endpoints still permit a company
+direction score with no benchmark/excess return. Known split/identity conflicts
+are unscorable. Returns are **unadjusted indicative price returns; corporate-action
+coverage is unverified**. Fees, dividends and simulated fills are outside this
+contract. Overlapping windows are not independent samples; hit rate is not profit.
+Collection respects global pause/storage guards and sends no new daily messages.
+
+### Daily paper experiment
+
+`/paper start` creates one separate experiment with **USD 2,000** virtual cash and
+enables processing. Repeating start returns the same experiment; `/paper on|off`
+resumes/pauses it without another deposit. Off or global pause cancels outstanding
+instructions, releases reservations and preserves holdings. There is no manual
+order, backdate, reset or automatic fifth-session liquidation command. The real
+`/buy`, `/sell` and portfolio ledger stay separate.
+
+| Command | Saved view |
+| --- | --- |
+| `/paper`, `/paper status` | Cash, reservations, holdings, timing and source gaps |
+| `/paper decisions [YYYY-MM-DD] [PAGE]` | Eight saved decisions per page, targets and actual order states |
+| `/paper decision ID` | Exact consumed inputs, components, timestamps, execution/FX evidence and fees |
+| `/paper trades [TICKER]` | Latest twelve simulated fills |
+| `/paper results` | Basis, realized net P&L, fees and explicitly dated indicative marks |
+
+Preparation starts one hour before a verified US open, reviewing paper holdings
+first, then the watchlist. Decisions are captured once **15 minutes before open**,
+with a one-minute capture window and no late backfill. Every watched symbol plus
+removed-but-held symbols receives a saved decision. Missing data produces a hold
+with reasons. Preparation respects source refresh intervals and shared budgets;
+it does not enable standalone alerts. All result views are cached and send no
+requests. Both paper processing and company scoring default off independently.
+
+The frozen `paper-rules-v1` classifier combines up to five distinct direct news
+events (mean bias ≥0.2 gives +2, ≤−0.2 gives −2), comparable recent earnings
+(+1/−1), qualified recent insider purchases (+1) and the same-session market
+outlook (+1/−1). News needs two extracts within 72 hours and a successful refresh
+within three hours. Fundamental collection health must be within 24 hours;
+earnings/insider events use a 30-day window. Earnings comparisons require explicit
+proof of matching period, basis and currency for both values. Existing calendar
+pairs without that proof stay neutral with a coverage gap. Unavailable optional
+coverage caps purchases at small; it does not itself force reductions.
+
+A score ≤−2 targets zero, −1 through +1 holds shares unchanged, and +2/+3/+4 or
+more targets small/medium/big holdings worth **$200/$400/$600**. These are total
+position targets. Whole shares are sized against a validated previous-session
+close. Upcoming earnings today/next session blocks purchases, and removed symbols
+can only hold/reduce/sell. Purchases require USD EQUITY identity. Rule weights and
+freshness defaults are engineering baselines, with no validated profitability or
+numerical confidence claim.
+
+Orders simulate at the exact first regular-minute open, first collected at open
++5 minutes. There is zero slippage and at most one fill per ticker/session across
+restarts. Opening gaps can reduce/cancel quantity; a frozen direction cannot flip.
+No fractional shares, borrowing or sale of unowned shares is allowed. Each executed
+purchase **and** sale costs **EUR 1 once**, converted to cents with the latest valid
+Frankfurter/ECB observation actually received by that open, at most seven calendar
+days old. Later FX updates never revise a historical fee. No eligible FX cancels
+the order; unfilled instructions expire at close +30 minutes.
+
+Buy funding is reserved by descending score, then ticker, including commission.
+Same-open sale proceeds become available next session. Cash/basis/P&L replay from
+immutable fills, with weighted basis allocated on partial sales. No new daily
+messages or brokerage connection is involved. A known corporate action blocks new
+orders and valuation until explicit support exists; that block survives source
+cache expiry. Corporate-action coverage remains unverified; positions are never
+silently adjusted for an inferred split.
+
+Valuations use saved validated closes with dates. Total equity/return is available
+only when every holding has a common-session mark; missing stocks are never valued
+at zero or presented as freshly marked. Realized P&L remains available separately.
+For example, buying four shares at $50 and selling them at $55 with EUR/USD 1.10
+ends at $2,017.80 cash after the two $1.10 fees.
 
 ## Data sources and limits
 
@@ -193,7 +277,8 @@ aware. Briefings, market outlooks and monitoring use the verified exchange calen
 
 ## Persistence and retention
 
-Schema 9 adds company research to the existing ledger, news, decision snapshots
+Schema 11 includes company outcomes, immutable price endpoints, paper evidence and
+FX receipt observations alongside the existing ledger, news, decision snapshots
 and market outlooks. Existing immutable packets are not rewritten during upgrades.
 Financial transactions and their FX provenance do not expire with market history.
 
@@ -205,6 +290,9 @@ Financial transactions and their FX provenance do not expire with market history
 | Decision snapshots | Scheduled: three months; manual: seven days / 32 records; 256 KiB per packet |
 | Market outlooks | Scheduled: three months; manual: seven days / 32 records; 64 KiB per packet; assessments expire with parent |
 | Company advice | Three calendar months, 256 records, 64 KiB each; count limit rejects new records rather than evicting unfinished forecasts |
+| Company assessments / endpoints | Assessments expire with advice; shared endpoints survive pending consumers and paper marks; 16 KiB/4 KiB per packet |
+| Paper run / decisions / fills | Retained together for replay; 10,000 decisions or 16 MiB immutable JSON per run; 16 KiB per decision/fill, 64 KiB per batch; cap pauses processing before partial capture |
+| Paper FX observations | Seven days after pending orders terminate; consumed FX is copied into durable fills |
 | News and signal history | Bounded per-symbol/global caches with three-month historical expiry |
 | Parsed public articles | 32 documents, 128 KiB each; six-hour refresh, seven-day expiry, one-hour negative cache |
 | Automatic database backups | Three retained plus one protected during deployment; three-month age limit |
@@ -257,7 +345,15 @@ Verify SSH host fingerprints normally; host-key conflicts are not bypassed.
 Only one process may poll a bot token. Preflight rejects a competing legacy
 system-wide service rather than stopping unrelated services.
 
-The installer builds the Pi's architecture, backs up a running prior database,
+New images are built on the Pi's architecture. The installer requires at least
+1 GiB free in container storage before a new build, and reuses
+an existing image only when its source-content release hash matches exactly.
+Builds avoid retaining intermediate layers, which duplicate entire root filesystems
+with the Pi's VFS storage driver. Older tagged releases still consume disk space;
+inspect them before removing obsolete images, preserving current/previous images
+and data volumes. `scripts/inspect-server.sh` includes filesystem free space.
+
+The installer backs up a running prior database,
 retains prior image/configuration, requires a successful Telegram poll, checks
 market access, restarts and compares saved settings/watchlist/trades, verifies
 zero published ports, and sends a Telegram confirmation. Wait for `Deployment
@@ -313,12 +409,11 @@ lost Telegram HTTP response can still cause duplicate delivery.
 
 ## Roadmap
 
-1. Collect and score company outcomes separately from saved five-session research;
-   capture the opening endpoint while minute history is still available.
-2. Define paper execution, starting cash, allocation limits, fees/slippage,
-   benchmarks and experiment retention, then implement a separate paper ledger.
-3. Evaluate prospective forecast usefulness and paper performance independently
-   before expanding model complexity or research claims.
+1. Evaluate prospective company forecast usefulness and paper performance
+   independently before expanding model complexity or research claims.
+2. Improve verified corporate-action coverage and comparable earnings evidence.
+3. Define archival/retention for continuing a capped paper experiment; define any
+   portfolio benchmark or drawdown methodology separately from company SPY scores.
 
 Richer publisher coverage, weekly comparisons, alert recovery rules and portfolio
 risk views remain possible follow-ups. Automated brokerage execution is outside

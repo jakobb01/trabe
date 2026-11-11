@@ -11,14 +11,17 @@ from pathlib import Path
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 
 
 class Store(MarketStorage):
     def __init__(self, path: Path):
         from trabe.advisor import ADVISOR_SCHEMA
+        from trabe.advisor_results import RESULTS_SCHEMA
         from trabe.news_store import NEWS_SCHEMA, migrate_legacy
         from trabe.outlook import OUTLOOK_SCHEMA
+        from trabe.paper_store import PAPER_SCHEMA, PaperStore
+        from trabe.price_endpoints import ENDPOINT_SCHEMA
         from trabe.signals import SIGNAL_SCHEMA
         from trabe.snapshots import SNAPSHOT_SCHEMA
 
@@ -76,7 +79,14 @@ class Store(MarketStorage):
             if version < 6:
                 migrate_legacy(db)
                 db.execute("PRAGMA user_version=6")
-            for statement in (*SNAPSHOT_SCHEMA, *OUTLOOK_SCHEMA, *ADVISOR_SCHEMA):
+            for statement in (
+                *SNAPSHOT_SCHEMA,
+                *OUTLOOK_SCHEMA,
+                *ADVISOR_SCHEMA,
+                *ENDPOINT_SCHEMA,
+                *RESULTS_SCHEMA,
+                *PAPER_SCHEMA,
+            ):
                 db.execute(statement)
             trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
             for column in ("fx_from", "fx_to"):
@@ -88,6 +98,16 @@ class Store(MarketStorage):
             if "kind" not in {row[1] for row in db.execute("PRAGMA table_info(outbox)")}:
                 db.execute("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'reply'")
             db.executemany("INSERT OR IGNORE INTO settings VALUES (?, ?)", DEFAULTS.items())
+            if version < 11:
+                # Cache retrieval used to record request start, not receipt. Never backdate knowledge.
+                observed_at = time.time()
+                for day, rate, effective, provider in db.execute(
+                    "SELECT requested_date,usd_per_eur,effective_date,provider FROM fx_cache"
+                ).fetchall():
+                    try:
+                        PaperStore.observe_fx(db, day, rate, effective, provider, observed_at)
+                    except ValueError:
+                        pass
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @contextmanager
@@ -110,7 +130,25 @@ class Store(MarketStorage):
     def set_setting(self, key: str, value: str):
         value = validate_setting(key, value)
         with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
+            if key in {"paper_enabled", "advisor_results_enabled"}:
+                generation = key.removesuffix("_enabled") + "_generation"
+                db.execute(
+                    "INSERT INTO state VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
+                    (generation,),
+                )
+            if key == "paper_enabled" and value == "off":
+                from trabe.paper_store import PaperStore
+
+                PaperStore.cancel_pending(db, "paper_disabled")
+                db.execute("UPDATE paper_run_state SET status='paused' WHERE status='active'")
+                db.execute(
+                    "UPDATE paper_session_state SET state='cancelled',reason='paper_disabled' WHERE state='preparing'"
+                )
+                db.execute(
+                    "UPDATE signal_jobs SET status='cancelled' WHERE status IN ('pending','running') AND kind='paper_prepare'"
+                )
 
     def state(self, key: str, default: str = "") -> str:
         with self.connection() as db:

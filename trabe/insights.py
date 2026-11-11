@@ -90,9 +90,14 @@ class Insights:
             self.worker.join(timeout=5)
 
     def queue(self, kind, symbols=None, *, origin="manual", gate=None, deadline=None, session=None):
-        if kind not in (*FEATURES, "briefing", "outlook"):
+        if kind not in (*FEATURES, "briefing", "outlook", "paper_prepare"):
             raise ValueError("Unknown refresh type.")
-        selected = sorted(Ledger(self.store).coverage() if symbols is None else set(symbols))
+        if kind == "paper_prepare":
+            from trabe.paper import Paper
+
+            selected = Paper(self.store).coverage()
+        else:
+            selected = sorted(Ledger(self.store).coverage() if symbols is None else set(symbols))
         if kind == "outlook":
             from trabe.market_context import BENCHMARKS
 
@@ -103,8 +108,9 @@ class Insights:
                 if origin == "automatic"
                 else "Add a watchlist symbol or record a position first."
             )
-        held = Ledger(self.store).held()
-        selected.sort(key=lambda ticker: (ticker not in held, ticker))
+        if kind != "paper_prepare":
+            held = Ledger(self.store).held()
+            selected.sort(key=lambda ticker: (ticker not in held, ticker))
         settings = self.store.settings()
         encoded = json.dumps(
             {
@@ -114,7 +120,14 @@ class Insights:
                 "gate": gate,
                 "deadline": deadline,
                 "session": session,
-                "settings": {k: settings[k] for k in ("snapshot_time", "timezone")}
+                "settings": {
+                    k: settings[k]
+                    for k in (
+                        ("news_sources", "insider_min_value_usd", "timezone")
+                        if kind == "paper_prepare"
+                        else ("snapshot_time", "timezone")
+                    )
+                }
                 if origin == "automatic"
                 else {},
             }
@@ -301,6 +314,8 @@ class Insights:
         return None
 
     def status(self):
+        from trabe.advisor_results import AdvisorResults
+
         settings = self.store.settings()
         lines = ["Earnings / insiders / news / briefing:"]
         for kind in (*FEATURES, "briefing"):
@@ -320,9 +335,14 @@ class Insights:
         lines.append(
             f"Queued refreshes: {pending} • running: {running} • {self.store.state('insights_error') or 'worker ready'}"
         )
+        lines.append(AdvisorResults(self.store).status())
         from trabe.outlook import OutlookService
 
         lines.append(OutlookService(self.store).status())
+        lines.append(
+            f"Paper processing: {settings['paper_enabled']} • /paper status"
+            + (" • " + self.store.state("paper_error") if self.store.state("paper_error") else "")
+        )
         for job, kind, status, encoded in jobs[:3]:
             payload = json.loads(encoded)
             total, remaining = len(payload["all"]), len(payload["remaining"])
@@ -615,9 +635,14 @@ class Insights:
                 db.execute("UPDATE signal_jobs SET status='cancelled' WHERE id=?", (job,))
             return True
         if automatic:
-            covered = Ledger(self.store).coverage()
+            if kind == "paper_prepare":
+                from trabe.paper import Paper
+
+                covered = set(Paper(self.store).coverage())
+            else:
+                covered = Ledger(self.store).coverage()
             payload["remaining"] = [s for s in payload["remaining"] if s in covered]
-        batch_size = 1 if kind in {"news", "briefing"} else 5
+        batch_size = 1 if kind in {"news", "briefing", "paper_prepare"} else 5
         batch, remaining = payload["remaining"][:batch_size], payload["remaining"][batch_size:]
         try:
             if kind == "outlook":
@@ -659,7 +684,14 @@ class Insights:
                     force=not automatic,
                     include_market=payload["remaining"] == payload["all"],
                 )
-            for feature in FEATURES if kind == "briefing" else (kind,):
+            if kind == "paper_prepare":
+                self.market_context(
+                    automatic=True,
+                    context="paper",
+                    deadline=deadline,
+                    guard_settings=payload.get("settings", {}),
+                ).refresh(batch, now=time.time(), include_market=False)
+            for feature in FEATURES if kind in {"briefing", "paper_prepare"} else (kind,):
                 self.feature(
                     feature,
                     automatic=automatic,

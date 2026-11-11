@@ -1,0 +1,37 @@
+{
+  "observed_at": 1794416558.2271872,
+  "session_date": "2026-11-10",
+  "chart": {
+    "error": null,
+    "result": [
+      {
+        "meta": {
+          "symbol": "VST",
+          "currency": "USD",
+          "instrumentType": "EQUITY",
+          "dataGranularity": "1m",
+          "exchangeTimezoneName": "America/New_York"
+        },
+        "timestamp": [
+          1794321000,
+          1794344340
+        ],
+        "indicators": {
+          "quote": [
+            {
+              "open": [
+                130.90499877929688,
+                130.93499755859375
+              ],
+              "close": [
+                130.72999572753906,
+                131.16000366210938
+              ]
+            }
+          ]
+        },
+        "events": {}
+      }
+    ]
+  }
+}

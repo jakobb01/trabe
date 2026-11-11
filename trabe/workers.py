@@ -2,14 +2,18 @@
 
 import logging
 import threading
+import time
 
+from trabe.advisor_results import AdvisorResults
 from trabe.api import ApiError
 from trabe.fx import FX
 from trabe.insights import Insights
 from trabe.maintenance import Maintenance
 from trabe.monitor import Monitor
 from trabe.outlook import OutlookService
+from trabe.paper import Paper
 from trabe.portfolio import Portfolio
+from trabe.signals import SignalHTTP, WorkStopped
 from trabe.snapshots import SnapshotService
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,8 @@ class Services:
         self.insights = Insights(config, store, outbox, self.monitor)
         self.snapshots = SnapshotService(store)
         self.outlooks = OutlookService(store)
+        self.advisor_results = AdvisorResults(store)
+        self.paper = Paper(store)
         self.threads = []
 
     def start(self):
@@ -39,6 +45,8 @@ class Services:
             (self.deliver, "telegram-delivery"),
             (self.maintain, "storage-maintenance"),
             (self.portfolio_work, "portfolio-work"),
+            (self.outcome_work, "company-outcomes"),
+            (self.paper_work, "paper-execution"),
         ):
             thread = threading.Thread(target=target, daemon=True, name=name)
             thread.start()
@@ -72,6 +80,7 @@ class Services:
                 self.maintenance.run_once()
                 self.snapshots.schedule(self.insights)
                 self.outlooks.schedule(self.insights)
+                self.paper.schedule(self.insights)
                 failures = 0
             except Exception:
                 failures += 1
@@ -97,6 +106,33 @@ class Services:
                 logger.error("Portfolio background work failed; retry scheduled.")
             self.stop.wait(60)
 
+    def outcome_work(self):
+        while not self.stop.wait(30):
+            try:
+                now = time.time()
+                # Leave the pre-open preparation/issuance window to the outlook worker.
+                session = self.advisor_results.calendar.at(now)
+                if session and session.opens - 1920 <= now < session.opens - 1500:
+                    continue
+                http = SignalHTTP(
+                    self.config,
+                    self.store,
+                    automatic=True,
+                    feature="advisor_results",
+                    stop=self.stop,
+                    deadline=now + 30,
+                )
+                self.advisor_results.run_once(http, now=now)
+                self.store.set_state("advisor_results_error", "")
+            except WorkStopped:
+                pass
+            except Exception:
+                logger.warning("Company outcome collection deferred; saved evidence retained.")
+                self.store.set_state(
+                    "advisor_results_error",
+                    "Outcome collection failed/deferred; saved evidence retained.",
+                )
+
     def close(self):
         self.insights.close()
         if self.monitor:
@@ -104,3 +140,29 @@ class Services:
         self.stop.set()
         for thread in self.threads:
             thread.join(timeout=5)
+
+    def paper_work(self):
+        while not self.stop.wait(30):
+            try:
+                now = time.time()
+                session = self.paper.calendar.at(now)
+                if session and session.opens - 1920 <= now < session.opens - 1500:
+                    continue
+                http = SignalHTTP(
+                    self.config,
+                    self.store,
+                    automatic=True,
+                    feature="paper",
+                    stop=self.stop,
+                    deadline=now + 30,
+                )
+                self.paper.run_once(http, now=now)
+                if self.store.state("paper_error").startswith("Paper processing failed/deferred"):
+                    self.store.set_state("paper_error", "")
+            except WorkStopped:
+                pass
+            except Exception:
+                logger.warning("Paper processing deferred; ledger retained.")
+                self.store.set_state(
+                    "paper_error", "Paper processing failed/deferred; saved ledger retained."
+                )

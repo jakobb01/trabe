@@ -1,4 +1,4 @@
-"""Owner-only commands. No scheduled trading logic runs in this first release."""
+"""Owner-only Telegram controls for the real ledger, research and paper experiment."""
 
 import logging
 import re
@@ -27,7 +27,8 @@ COMMANDS = [
     ("snapshot", "Save or inspect immutable daily decision inputs"),
     ("briefing", "Daily overview: now, cached, details, HH:MM, on/off"),
     ("outlook", "Pre-open SPY/QQQ outlook and saved results"),
-    ("advisor", "Five-session company research and saved evidence"),
+    ("advisor", "Company research, saved outcomes and tracking"),
+    ("paper", "Simulated stock experiment, decisions and results"),
     ("menu", "Show command help"),
     ("help", "Show available commands"),
     ("status", "Service health and API budget"),
@@ -92,6 +93,8 @@ HELP = """trabe
 /briefing now|cached|details|HH:MM|on|off — overview or full cached digest
 /outlook [now|cached|YYYY-MM-DD|results|on|off] — saved pre-open expectation
 /advisor [TICKER|cached TICKER|evidence TICKER] — saved five-session research
+/advisor results [TICKER] | result ID | record ID | track on|off — company outcomes
+/paper [start|on|off|status|decisions|decision ID|trades|results] — virtual stock experiment
 /set earnings_warning_days 5
 /set insider_min_value_usd 10000
 /menu — show command help
@@ -209,6 +212,10 @@ class Bot:
             self.telegram.send(self.config.owner_id, reply)
 
     def command(self, command: str, args: list[str]) -> str:
+        if command == "paper":
+            from trabe.paper import Paper
+
+            return Paper(self.store).handle(args)
         if command == "snapshot":
             return SnapshotService(self.store).handle(args)
         signal_reply = self.insights.handle(command, args)
@@ -483,6 +490,14 @@ class Bot:
             if len(args) != 2:
                 raise ValueError("Usage: /set NAME VALUE. Use /settings to see available names.")
             key, value = args
+            if key == "paper_enabled":
+                from trabe.paper import Paper
+
+                return Paper(self.store).handle([value])
+            if key == "advisor_results_enabled":
+                from trabe.advisor import Advisor
+
+                return Advisor(self.store).handle(["track", value])
             if key == "snapshot_enabled":
                 return SnapshotService(self.store).handle([value])
             if key in (

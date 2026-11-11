@@ -55,6 +55,8 @@ bot token; develop with fixtures while the Pi is polling.
 | `/briefing now`, `/briefing cached`, `/briefing details` | Refresh or inspect the overview/full report |
 | `/outlook cached`, `/outlook results` | Read saved market expectations and assessments |
 | `/advisor VST`, `/advisor evidence VST` | Save company research and inspect its evidence |
+| `/advisor track on`, `/advisor results`, `/advisor result ID` | Collect and inspect five-session company outcomes |
+| `/paper start`, `/paper decisions`, `/paper results` | Start and inspect the separate virtual stock experiment |
 | `/status`, `/settings`, `/pause 24h`, `/resume` | Inspect and control the service |
 
 The [project guide](docs/guide.md) covers commands, source limits, forecast

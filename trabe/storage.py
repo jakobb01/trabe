@@ -149,6 +149,12 @@ class MarketStorage:
                 )
             db.execute("DELETE FROM outbox WHERE kind!='reply'")
             if until:
+                from trabe.paper_store import PaperStore
+
+                PaperStore.cancel_pending(db, "global_pause")
+                db.execute(
+                    "UPDATE paper_session_state SET state='cancelled',reason='global_pause' WHERE state='preparing'"
+                )
                 db.execute(
                     "UPDATE signal_jobs SET status='cancelled' WHERE status IN ('pending','running') AND json_extract(symbols,'$.origin')='automatic'"
                 )

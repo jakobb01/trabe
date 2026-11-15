@@ -70,40 +70,10 @@ class NewsSources:
             rows = raw.get("results")
             if not isinstance(rows, list):
                 raise ValueError("Invalid Massive news response.")
-            result = []
-            for row in rows[:100]:
-                if not isinstance(row, dict) or ticker not in array(row.get("tickers")):
-                    continue
-                annotations = []
-                for insight in array(row.get("insights"))[:20]:
-                    if not isinstance(insight, dict) or insight.get("ticker") != ticker:
-                        continue
-                    score = vendor_score(
-                        provider,
-                        ticker,
-                        insight.get("sentiment"),
-                        explanation=self.clean(insight.get("sentiment_reasoning"), 320),
-                    )
-                    if score:
-                        annotations.append(score)
-                normalized = self.normalize(
-                    {
-                        "id": row.get("id"),
-                        "headline": row.get("title"),
-                        "summary": row.get("description", ""),
-                        "url": row.get("article_url"),
-                        "source": (row.get("publisher") or {}).get("name", provider),
-                        "related": ticker,
-                        "datetime": timestamp(row.get("published_utc")),
-                        "annotations": annotations,
-                    },
-                    ticker,
-                    provider,
-                    received,
-                )
-                if normalized:
-                    result.append(normalized)
-            return result, bool(raw.get("next_url")) or len(rows) >= 100
+            self.last_massive_response = raw
+            return self.massive_items(raw, ticker, received), bool(raw.get("next_url")) or len(
+                rows
+            ) >= 100
         raw = self.http.news_api(
             "marketaux",
             symbols=ticker,
@@ -161,3 +131,43 @@ class NewsSources:
             if normalized:
                 result.append(normalized)
         return result, len(rows) >= 3
+
+    def massive_items(self, raw, ticker, received):
+        provider = "massive"
+        rows = raw.get("results")
+        if not isinstance(rows, list):
+            raise ValueError("Invalid Massive news response.")
+        result = []
+        for row in rows[:100]:
+            if not isinstance(row, dict) or ticker not in array(row.get("tickers")):
+                continue
+            annotations = []
+            for insight in array(row.get("insights"))[:20]:
+                if not isinstance(insight, dict) or insight.get("ticker") != ticker:
+                    continue
+                score = vendor_score(
+                    provider,
+                    ticker,
+                    insight.get("sentiment"),
+                    explanation=self.clean(insight.get("sentiment_reasoning"), 320),
+                )
+                if score:
+                    annotations.append(score)
+            normalized = self.normalize(
+                {
+                    "id": row.get("id"),
+                    "headline": row.get("title"),
+                    "summary": row.get("description", ""),
+                    "url": row.get("article_url"),
+                    "source": (row.get("publisher") or {}).get("name", provider),
+                    "related": ticker,
+                    "datetime": timestamp(row.get("published_utc")),
+                    "annotations": annotations,
+                },
+                ticker,
+                provider,
+                received,
+            )
+            if normalized:
+                result.append(normalized)
+        return result

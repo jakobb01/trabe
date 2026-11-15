@@ -147,6 +147,9 @@ class MarketStorage:
                     "INSERT OR REPLACE INTO state VALUES ('insights_resumed_at',?)",
                     (str(time.time()),),
                 )
+            from trabe.news_event_store import invalidate
+
+            invalidate(db, time.time(), "pause_or_resume")
             db.execute("DELETE FROM outbox WHERE kind!='reply'")
             if until:
                 from trabe.paper_store import PaperStore

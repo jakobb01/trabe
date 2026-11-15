@@ -72,8 +72,8 @@ class NewsTests(unittest.TestCase):
         self.assertNotIn("utm_", row["payload"]["url"])
         before = len(self.http.calls)
         self.news.refresh(["GOOGL"], now=self.now + 1)
-        report = self.news.report(["GOOGL"], now=self.now + 2)
-        self.news.briefing(["GOOGL"], now=self.now + 2)
+        report = self.news.legacy_report(["GOOGL"], now=self.now + 2)
+        self.news.legacy_briefing(["GOOGL"], now=self.now + 2)
         self.assertEqual(len(self.http.calls), before)
         self.assertIn("heuristic", report)
         self.assertNotIn("extractive-v1", report)
@@ -118,7 +118,7 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(rows[0]["available_at"], self.now)
         self.assertEqual(rows[0]["payload"]["symbols"], ["GOOGL", "VST"])
         self.assertIn("story?article=12", rows[0]["payload"]["url"])
-        self.assertIn("VST • Bullish", self.news.report(["VST"], now=self.now + 11))
+        self.assertIn("VST • Bullish", self.news.legacy_report(["VST"], now=self.now + 11))
 
     def test_rss_fallback_retains_primary_failure_and_extract_provenance(self):
         self.http.primary_error = ApiError("body must never be displayed", 403)
@@ -129,7 +129,7 @@ class NewsTests(unittest.TestCase):
         <description><![CDATA[<b>First supplied sentence.</b> Second supplied sentence.]]></description>
         </item></channel></rss>""".encode()
         self.news.refresh(["GOOGL"], now=self.now)
-        report = self.news.report(["GOOGL"], now=self.now)
+        report = self.news.legacy_report(["GOOGL"], now=self.now)
         self.assertIn("fallback feed", report)
         self.assertIn("HTTP 403", self.news._health("GOOGL")["primary_error"])
         self.assertNotIn("body must never", report)
@@ -147,7 +147,7 @@ class NewsTests(unittest.TestCase):
         self.http.rss_error = OSError("offline")
         self.news.refresh(["GOOGL"], now=self.now + 10801)
         self.assertEqual(len(self.rows()), 1)
-        report = self.news.report(["GOOGL"], now=self.now + 10802)
+        report = self.news.legacy_report(["GOOGL"], now=self.now + 10802)
         self.assertIn("cached news retained", report)
         self.assertIn("HTTP 429", self.news._health("GOOGL")["primary_error"])
         self.assertNotIn("credential-bearing", report)
@@ -238,15 +238,17 @@ class NewsTests(unittest.TestCase):
                 for i in range(5)
             ]
         self.news.refresh([e[0] for e in examples], now=self.now)
-        report = self.news.report([e[0] for e in examples], now=self.now)
+        report = self.news.legacy_report([e[0] for e in examples], now=self.now)
         for symbol, headline, label in examples:
             self.assertIn(f"{symbol} • {label}", report)
             self.assertEqual(report.count(headline), 1)
         for unwanted in ("https://", "Example Publisher", "lexicon-v1", "extractive-v1", "score"):
             self.assertNotIn(unwanted, report)
         self.assertLess(len(report), 800)
-        self.assertEqual(self.news.report(["VST"], now=self.now).count("Vistra cuts guidance"), 1)
-        briefing = "\n".join(self.news.briefing(["GOOGL", "VST", "IBM"], now=self.now))
+        self.assertEqual(
+            self.news.legacy_report(["VST"], now=self.now).count("Vistra cuts guidance"), 1
+        )
+        briefing = "\n".join(self.news.legacy_briefing(["GOOGL", "VST", "IBM"], now=self.now))
         self.assertIn("Bullish", briefing)
         self.assertNotIn("https://", briefing)
         self.assertNotIn("lexicon-v1", briefing)
@@ -255,7 +257,7 @@ class NewsTests(unittest.TestCase):
         self.assertIn("url", self.rows()[0]["payload"])
 
     def test_missing_news_is_unknown_not_neutral(self):
-        report = self.news.report(["VST"], now=self.now)
+        report = self.news.legacy_report(["VST"], now=self.now)
         self.assertIn("no recent cached news", report.lower())
         self.assertNotIn("Neutral", report)
 
@@ -279,8 +281,8 @@ class NewsTests(unittest.TestCase):
                 )
             ]
             self.news.refresh(["VST"], now=now, force=True)
-            self.assertIn(expected, self.news.report(["VST"], now=now))
-            self.assertIn(expected, self.news.briefing(["VST"], now=now, limit=1)[0])
+            self.assertIn(expected, self.news.legacy_report(["VST"], now=now))
+            self.assertIn(expected, self.news.legacy_briefing(["VST"], now=now, limit=1)[0])
 
     def test_supplied_input_bounds_markup_and_url_normalization(self):
         self.assertEqual(text("&lt;b&gt;A report.&lt;/b&gt;"), "A report.")
@@ -305,9 +307,9 @@ class NewsTests(unittest.TestCase):
         ]
         self.news.refresh(["GOOGL", "VST"], now=self.now)
         before = len(self.http.calls)
-        lines = self.news.briefing(["VST", "GOOGL"], now=self.now, limit=1)
+        lines = self.news.legacy_briefing(["VST", "GOOGL"], now=self.now, limit=1)
         self.assertIn("GOOGL", lines[0])
-        report = self.news.report(["VST", "GOOGL"], now=self.now)
+        report = self.news.legacy_report(["VST", "GOOGL"], now=self.now)
         self.assertLess(report.index("GOOGL"), report.index("VST"))
         self.assertEqual(len(self.http.calls), before)
 

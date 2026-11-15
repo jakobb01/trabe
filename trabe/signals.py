@@ -227,6 +227,9 @@ class SignalHTTP:
         self.deadline, self.guard_settings = deadline, guard_settings or {}
 
     def guard(self):
+        expected = getattr(self, "presentation_generation", None)
+        if expected is not None and expected != int(self.store.state("news_event_generation", "0")):
+            raise WorkStopped("Presentation settings generation changed.")
         if self.stop is not None and self.stop.is_set():
             raise WorkStopped("Background work stopped.")
         if self.automatic:
@@ -322,6 +325,7 @@ class SignalHTTP:
         """One bounded page; no authenticated redirects or arbitrary next_url fetches."""
         if provider not in {"massive", "marketaux"}:
             raise ValueError("Unknown news API.")
+        presentation = params.pop("_presentation", False)
         key = getattr(self.config, provider + "_key", "")
         if not key:
             raise ApiError("News API key is not configured.", 401)
@@ -345,6 +349,17 @@ class SignalHTTP:
             budget = int(self.store.settings()[provider + "_daily_budget"])
             if self.store.provider_usage(provider) >= budget:
                 raise ApiError("News request budget deferred.", 429, 3600)
+            if presentation:
+                from trabe.ledger import Ledger
+                from trabe.news_sources import INTERVALS
+
+                baseline = math.ceil(86400 / INTERVALS["massive"]) * len(
+                    Ledger(self.store).coverage()
+                )
+                extra = json.loads(self.store.state("massive_extra_pages", "{}"))
+                used_extra = extra.get("count", 0) if extra.get("day") == self.store.today() else 0
+                if provider != "massive" or used_extra >= min(40, max(0, budget - baseline)):
+                    raise ApiError("News request budget deferred.", 429, 3600)
             self._pace(provider + "_request_finished", 15.1 if provider == "massive" else 2.1)
             if self.automatic and provider not in self.store.settings()["news_sources"].split(","):
                 raise WorkStopped("News source disabled during automatic work.")
@@ -358,6 +373,11 @@ class SignalHTTP:
                 raise ApiError("News request budget deferred.", 429, 60) from None
             if state_key is not None:
                 self.store.set_state(state_key, json.dumps({"day": day, "count": used + 1}))
+            if presentation:
+                self.store.set_state(
+                    "massive_extra_pages",
+                    json.dumps({"day": self.store.today(), "count": used_extra + 1}),
+                )
             if provider == "massive":
                 url = "https://api.massive.com/v2/reference/news?" + urlencode(params)
                 headers = {"Authorization": "Bearer " + key}
@@ -582,3 +602,50 @@ class SignalHTTP:
 
     def xml(self, url, provider="yahoo"):
         return self._public(url, provider)
+
+    def issuer(self, url, *, validators=None, pages=False):
+        from trabe.news_collection import allowed_issuer_url
+
+        if not allowed_issuer_url(url, pages=pages):
+            raise ValueError("Unapproved issuer feed URL.")
+        self.guard()
+        now = time.time()
+        with self.store.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM signal_http_calls WHERE requested_at<?", (now - 3600,))
+            if (
+                db.execute(
+                    "SELECT COUNT(*) FROM signal_http_calls WHERE provider='issuer'"
+                ).fetchone()[0]
+                >= 30
+            ):
+                raise ApiError("Issuer hourly allowance reached.", 429, 3600)
+            db.execute("INSERT INTO signal_http_calls VALUES ('issuer',?)", (now,))
+        headers = {"User-Agent": f"trabe/{__version__} (financial-watchlist)"}
+        for key, header in (("etag", "If-None-Match"), ("modified", "If-Modified-Since")):
+            value = (validators or {}).get(key)
+            if isinstance(value, str) and len(value) <= 200 and not any(c in value for c in "\r\n"):
+                headers[header] = value
+        opener = build_opener(NoRedirect()).open if self.opener is urlopen else self.opener
+        try:
+            with opener(Request(url, headers=headers), timeout=12) as response:
+                raw = response.read(512 * 1024 + 1)
+                validators = {
+                    k: response.headers.get(h, "")[:200]
+                    for k, h in (("etag", "ETag"), ("modified", "Last-Modified"))
+                }
+            if len(raw) > 512 * 1024:
+                raise ApiError("Issuer response exceeds size limit.")
+            self.received_at = time.time()
+            self.guard()
+            return raw, validators
+        except HTTPError as error:
+            code = error.code
+            error.close()
+            if code == 304:
+                self.received_at = time.time()
+                self.guard()
+                return None, validators or {}
+            raise ApiError(f"Issuer feed HTTP {code}.", code) from None
+        except (URLError, OSError, TimeoutError):
+            raise ApiError("Issuer feed request failed.") from None

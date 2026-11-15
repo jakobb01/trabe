@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from trabe.calendar import USCalendar
 from trabe.ledger import Ledger
 from trabe.portfolio import Portfolio
+from trabe.presentation import display_text
 from trabe.signals import SignalHTTP, SignalStore, WorkStopped
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,29 @@ class Insights:
             return cursor.lastrowid
         return f"{kind.capitalize()} refresh queued for {len(selected)} symbol(s). I'll send the result here."
 
+    def apply_automation(self, db, command, option):
+        if (
+            option == "on"
+            and command == "earnings"
+            and not (self.config.finnhub_key or self.config.api_key)
+        ):
+            raise ValueError(
+                "Configure a Finnhub or Alpha Vantage key locally before enabling earnings."
+            )
+        if option == "on" and command == "insiders" and not self.config.finnhub_key:
+            raise ValueError(
+                "A Finnhub key is required for non-derivative verification. Configure it locally and redeploy."
+            )
+        previous = self.store.settings(db)[command + "_enabled"]
+        self.store.apply_setting(db, command + "_enabled", option)
+        if command in ("insiders", "earnings") and option == "on" and previous != "on":
+            db.execute(
+                "INSERT OR REPLACE INTO state VALUES (?,?)",
+                (command + "_enabled_at", str(time.time())),
+            )
+        if option == "off":
+            db.execute("DELETE FROM outbox WHERE kind=?", (command,))
+
     def handle(self, command, args):
         if command == "advisor":
             from trabe.advisor import Advisor
@@ -227,41 +251,37 @@ class Insights:
         if command == "insider":
             command = "insiders"
         if command in FEATURES:
-            if len(args) > 2 or (len(args) == 2 and args[0].lower() not in ("cached", "refresh")):
+            if len(args) > 2 or (
+                len(args) == 2
+                and args[0].lower()
+                not in (
+                    ("cached", "refresh", "details") if command == "news" else ("cached", "refresh")
+                )
+            ):
                 raise ValueError(
                     f"Usage: /{command} [TICKER|cached [TICKER]|refresh [TICKER]|on|off]"
                 )
             option = args[0].lower() if args else ""
+            if command == "news" and option == "details":
+                from trabe.bot import symbol
+
+                symbols = (
+                    [symbol(args[1])] if len(args) == 2 else sorted(Ledger(self.store).coverage())
+                )
+                return self.feature("news").legacy_report(symbols, now=time.time())
             if command == "news" and option == "sources":
-                return self.feature("news").sources_status(sorted(Ledger(self.store).coverage()))
+                from trabe.news_event_store import EventStore
+
+                symbols = sorted(Ledger(self.store).coverage())
+                return (
+                    self.feature("news").sources_status(symbols)
+                    + "\n\nPresentation coverage\n"
+                    + "\n".join(EventStore(self.store).coverage_lines(symbols, time.time()))
+                )
             if option in ("on", "off"):
-                if (
-                    option == "on"
-                    and command == "earnings"
-                    and not (self.config.finnhub_key or self.config.api_key)
-                ):
-                    raise ValueError(
-                        "Configure a Finnhub or Alpha Vantage key locally before enabling earnings."
-                    )
-                if option == "on" and command == "insiders" and not self.config.finnhub_key:
-                    raise ValueError(
-                        "A Finnhub key is required for non-derivative verification. Configure it locally and redeploy."
-                    )
                 with self.store.connection() as db:
                     db.execute("BEGIN IMMEDIATE")
-                    previous = db.execute(
-                        "SELECT value FROM settings WHERE key=?", (command + "_enabled",)
-                    ).fetchone()[0]
-                    db.execute(
-                        "UPDATE settings SET value=? WHERE key=?", (option, command + "_enabled")
-                    )
-                    if command in ("insiders", "earnings") and option == "on" and previous != "on":
-                        db.execute(
-                            "INSERT OR REPLACE INTO state VALUES (?,?)",
-                            (command + "_enabled_at", str(time.time())),
-                        )
-                    if option == "off":
-                        db.execute("DELETE FROM outbox WHERE kind=?", (command,))
+                    self.apply_automation(db, command, option)
                 self.wake.set()
                 return f"{command.capitalize()} automation {option}. Cached views remain available; /{command} refresh requests new data."
             if option in ("cached", "refresh"):
@@ -356,6 +376,7 @@ class Insights:
 
     @staticmethod
     def bounded(text):
+        text = display_text(text)
         if len(text) <= 13000:
             return text
         return (
@@ -394,6 +415,8 @@ class Insights:
             + (" • partial; missing values excluded" if partial else "")
             + (" • stale position prices; see /portfolio" if stale else "")
         )
+        sections.append("Company developments")
+        sections.extend(self.feature("news").briefing(symbols, now=now, limit=3))
         news = self.market_news().briefing(now=now)
         statuses = self.repo.status("market-news")
         if not statuses:
@@ -426,7 +449,20 @@ class Insights:
         selected = []
         omitted = False
         for section in sections:
-            if units("\n\n".join([*selected, section, footer])) <= 3300:
+            section = display_text(section)
+            if (
+                units(
+                    "\n\n".join(
+                        [
+                            *selected,
+                            section,
+                            "Some sections exceed this overview; read /briefing details.",
+                            footer,
+                        ]
+                    )
+                )
+                <= 3300
+            ):
                 selected.append(section)
             else:
                 omitted = True
@@ -495,7 +531,12 @@ class Insights:
             ("news", "News"),
         ):
             lines.extend(("", title))
-            items = self.feature(kind).briefing(symbols, now=now, limit=3)
+            if kind == "news":
+                from trabe.news_digest import NewsDigest
+
+                items = NewsDigest(self.store).details(symbols, now)
+            else:
+                items = self.feature(kind).briefing(symbols, now=now, limit=3)
             lines.extend(items or ["No eligible cached items; source coverage may be unavailable."])
             statuses = self.repo.status(kind)
             relevant = [s for s in statuses if s["symbol"] in symbols or s["symbol"] == "*"]

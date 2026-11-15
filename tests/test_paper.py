@@ -10,7 +10,7 @@ import test_advisor as advisor_fixtures
 from test_paper_rules import inputs_for
 from test_price_endpoints import chart
 
-from trabe.bot import COMMANDS, Bot
+from trabe.bot import ADVANCED_COMMANDS, COMMANDS, Bot
 from trabe.calendar import USCalendar
 from trabe.config import Config
 from trabe.fx import FX
@@ -281,8 +281,8 @@ class PaperTests(unittest.TestCase):
         with patch("trabe.signals.SignalHTTP.json", side_effect=AssertionError("cached view HTTP")):
             for args in ([], ["status"], ["results"], ["decisions"], ["trades"]):
                 self.paper.handle(args)
-        self.assertEqual(sum(c[0] == "paper" for c in COMMANDS), 1)
-        self.assertEqual(len(COMMANDS), 40)
+        self.assertEqual(sum(c[0] == "paper" for c in ADVANCED_COMMANDS), 1)
+        self.assertEqual(len(COMMANDS), 6)
         with self.store.connection() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM signal_jobs").fetchone()[0], 0)
 

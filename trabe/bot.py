@@ -20,7 +20,7 @@ from trabe.store import Store
 
 logger = logging.getLogger(__name__)
 
-COMMANDS = [
+ADVANCED_COMMANDS = [
     ("earnings", "Estimates, quarterly history and result updates"),
     ("insiders", "Qualifying insider purchases and filing sources"),
     ("news", "Refresh company news and labelled sentiment"),
@@ -61,6 +61,14 @@ COMMANDS = [
     ("resume", "Resume saved automation"),
     ("history", "Daily summaries: /history VST 5"),
     ("storage", "Storage and retention health"),
+]
+COMMANDS = [
+    ("home", "Today, companies, portfolio and settings"),
+    ("briefing", "Morning briefing and cached details"),
+    ("news", "Company developments and source links"),
+    ("portfolio", "Recorded holdings"),
+    ("status", "Service health"),
+    ("help", "Help and advanced commands"),
 ]
 
 REMOVE_KEYBOARD = {"remove_keyboard": True}
@@ -165,18 +173,25 @@ class Bot:
         *,
         monitor=None,
         insights=None,
+        callback_responder=None,
     ):
         self.config, self.store, self.telegram, self.market = config, store, telegram, market
         self.started = time.monotonic()
         self.username = ""
+        self.bot_id = None
         self.ledger = Ledger(store)
         self.portfolio = Portfolio(store, monitor)
         self.update_id = None
         self.scans = Scans(store, market)
         self.controls = Controls(config, store, market, monitor)
         self.insights = insights or Insights(config, store, telegram, monitor)
+        from trabe.navigation import Navigation
+
+        self.navigation = Navigation(self, callback_responder)
 
     def handle(self, update: dict):
+        if "callback_query" in update:
+            return self.navigation.callback(update["callback_query"])
         message = update.get("message", {})
         chat, sender = message.get("chat", {}), message.get("from", {})
         # A chat ID alone is insufficient for groups; both identities and private
@@ -201,6 +216,16 @@ class Bot:
             return
         try:
             self.update_id = update.get("update_id")
+            if command.lower() in ("home", "start", "menu") and not parts[1:]:
+                if command.lower() in ("start", "menu"):
+                    self.telegram.send(
+                        self.config.owner_id,
+                        "Use /home for the inline menu or /help for commands.",
+                        reply_markup=REMOVE_KEYBOARD,
+                    )
+                text, markup = self.navigation.render()
+                self.telegram.send(self.config.owner_id, text, reply_markup=markup)
+                return
             reply = self.command(command.lower(), parts[1:])
         except (ValueError, ApiError) as error:
             reply = str(error)  # Only our sanitized errors reach this boundary.
@@ -224,8 +249,14 @@ class Bot:
         extra = self.controls.handle(command, args)
         if extra is not None:
             return extra
-        if command in ("start", "help", "menu"):
-            return HELP
+        if command in ("home", "start", "menu"):
+            return self.navigation.render()[0]
+        if command == "help":
+            return (
+                HELP
+                if args == ["advanced"]
+                else "Everyday: /home, /briefing cached, /news cached, /portfolio, /status.\nAll advanced commands: /help advanced"
+            )
         if command == "test":
             return "✅ Telegram delivery works. This response came from trabe."
         if command == "status":

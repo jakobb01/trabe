@@ -165,6 +165,7 @@ class Maintenance:
 
     def expire(self, now: float):
         from trabe.advisor import Advisor
+        from trabe.news_event_store import EventStore
         from trabe.news_store import NewsStore
         from trabe.outlook import OutlookStore
         from trabe.paper import Paper
@@ -176,6 +177,12 @@ class Maintenance:
         with self.store.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             NewsStore(self.store).prune(now, db)
+            from trabe.navigation import prune_tokens
+            from trabe.news_push import NewsPush
+
+            NewsPush(self.store, self.owner_id or 0).expire(now, db)
+            EventStore(self.store).prune(now, db)
+            prune_tokens(db, now)
             SnapshotStore(self.store).prune(now, db)
             OutlookStore(self.store).prune(now, db)
             Advisor(self.store).prune(now, db)

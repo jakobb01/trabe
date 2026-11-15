@@ -20,13 +20,13 @@ class MarketNewsTests(unittest.TestCase):
         self.store = Store(Path(temp.name) / "agent.db")
         self.calls = []
         self.rows = [self.item()]
-        self.fail = False
+        self.http_failed = False
         fixture = self
 
         class HTTP:
             def finnhub(self, endpoint, **kwargs):
                 fixture.calls.append((endpoint, kwargs))
-                if fixture.fail:
+                if fixture.http_failed:
                     raise ApiError("private vendor error", 403)
                 return fixture.rows
 
@@ -79,7 +79,7 @@ class MarketNewsTests(unittest.TestCase):
         row = SignalStore(self.store).get("market-news", "latest")
         self.assertEqual(len(row["payload"]["items"]), 1)
         text = "\n".join(self.feature.briefing(now=NOW))
-        self.assertEqual(text, "• Treasury yields fell as investors assessed inflation. • 1m ago")
+        self.assertEqual(text, "• Treasury yields fell as investors assessed inflation. • 0h ago")
         self.assertNotIn("Federal Reserve discusses", text)
         self.assertNotIn("Reuters", text)
         self.assertNotIn("Amazon", text)
@@ -90,7 +90,7 @@ class MarketNewsTests(unittest.TestCase):
         self.assertEqual(len(self.calls), before)
 
     def test_primary_failure_uses_verified_index_rss_without_inventing_sentiment(self):
-        self.fail = True
+        self.http_failed = True
         self.feature.refresh(now=NOW)
         text = "\n".join(self.feature.briefing(now=NOW))
         self.assertIn("Consumer prices rose less than expected.", text)

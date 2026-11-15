@@ -11,9 +11,18 @@ release evidence are kept outside Git.
 
 ## Telegram controls
 
-Use Telegram's expandable command menu or `/help`. Startup, `/start`, `/menu`
-and `/help` remove the old large reply keyboard. Only the paired owner in their
-private chat can read or modify the app.
+Open `/home` for Today / Companies / Portfolio / Settings. Company cards link to
+News / saved Research / Earnings / Insiders. News has Sources / More / Refresh;
+Refresh queues the existing background job and returns cached status immediately.
+Cached navigation never requests provider data, issues research or starts paper
+trading. Research creation remains the explicit `/advisor TICKER` command.
+
+The expandable everyday menu has home, briefing, news, portfolio, status and help.
+`/help advanced` lists every existing advanced command. `/start` and `/menu` open
+Home and remove the old large reply keyboard; startup and `/help` also remove it.
+Only the paired owner in their private chat can read or modify the app. Buttons
+expire after 24 hours; reopen `/home` if a card has expired. Settings buttons
+explicitly set on/off and cannot repeat a mutation after callback replay.
 
 | Commands | Behavior |
 | --- | --- |
@@ -74,8 +83,9 @@ automation. `/insider` aliases `/insiders`; `/news sources` shows source status.
 | `/briefing HH:MM`, `/briefing on\|off` | Configure the optional morning briefing |
 
 The overview includes local market times, SPY/QQQ and VIX observations, saved
-outlook or issue time, portfolio totals, up to three market extracts and one
-earnings/insider card each. Source failures, stale prices and partial totals stay
+outlook or issue time, portfolio totals, up to three material company developments, three market extracts and one
+earnings/insider card each. Company events rank across all held/watched companies,
+with multi-company copies deduplicated. Source failures, stale prices and partial totals stay
 visible. Whole sections that exceed one message are deferred to details rather
 than cut midway through a qualification. Cached views render current data, not
 an immutable historical briefing.
@@ -83,6 +93,73 @@ an immutable historical briefing.
 Briefings may refresh sections whose standalone automation is off. The scheduled
 time uses the local date of a verified US session open and must precede that open;
 session-based claims prevent duplicate delivery across travel/restarts.
+
+### Company developments and news alerts
+
+`/news cached [TICKER]` shows local event cards with named sources: materiality,
+positive/negative/mixed/neutral/unknown price direction, short supported source
+sentences, attribution and uncertainty. Explicit CEO transitions, actual results
+and binding regulatory actions outrank routine previews. A major event can have
+unknown price impact. Unresolved actors and speculative claims stay uncertain;
+company statements are attributed, not independently verified. Relationships are
+small, curated and dated; coverage is not a general understanding of company news.
+
+News cards show age in hours (for example, “5h ago”), without an absolute date or clock time. Active cards cover 72 hours. Still relevant major events from the last seven days
+appear separately with their age in hours. `/news sources` shows specific per-source
+coverage; a complete response means only that provider's fixed interval was read.
+Finnhub/Yahoo caps, source failures, unsupported issuers, stale caches and retention
+gaps remain visible. At storage caps, history can be shorter than the 14-day target.
+Pending notification evidence is protected; overflow is deferred or coverage marked
+partial. There is no promise of complete weekly or real-world news recall.
+
+NVIDIA, AMD and Vistra official RSS feeds supplement the existing providers hourly.
+Official extracts are short and attributed. Telegram views omit URLs throughout,
+including legacy replies and detailed reports; original URLs stay in the internal
+evidence audit. The recurring “Coverage is partial” footer is omitted. Amazon and Alphabet official IR
+requests returned 403 at onboarding; their official feeds remain unsupported.
+No general crawler or access workaround is used. Issuer fetches are bounded to
+512 KiB, conditional where supported, with fixed HTTPS URLs and no redirects.
+At most two reviewed public issuer pages are considered for missing text per
+symbol refresh, independently of Yahoo. No additional full-text cache is created.
+
+Massive continuation uses the same 100-item page size, at most two extra pages per
+symbol pass and 40 extra requests/day within the saved budget. At least 24 requests
+per configured held/watched symbol/day are reserved for hourly baseline collection
+(120 for five symbols); a budget smaller than this leaves no extra pages. Each
+fixed scan resumes after committed evidence, with six-hour watermark overlap.
+Fresh first pages continue separately while a backlog catches up. Unsafe next URLs,
+repeating/expired cursors and budget deferral produce visible partial intervals.
+The presentation worker runs separately and yields during pre-open preparation.
+
+New sources, extra pages and new event rules enrich presentation only. The advisor,
+paper experiment and frozen historical packets retain their existing legacy news
+baseline. `/news details [TICKER]` exposes that older sentiment analysis; it is not
+the richer presentation digest. No strategy-rule version changes with this release.
+
+Material news pushes are **off by default**, including on upgrades. Enable them
+explicitly with `/set news_alerts_enabled on` or Settings; `/news on` is also
+required. Defaults: `news_alert_daily_cap=3` (0–10), quiet hours 22:00–08:00 with
+`news_quiet_enabled=on` in the saved IANA timezone. Set `news_quiet_start` and
+`news_quiet_end` to change the interval. Equal start/end means all-day quiet.
+There is no urgent bypass. Quiet candidates coalesce; stale ones expire rather
+than building an unlimited queue. Caps count enqueued messages conservatively
+per local day and rolling 24 hours, including messages later dropped.
+
+Only fresh, directly supported high-materiality events or substantive corrections
+to previously notified events qualify. Uncertain clustering, competition claims,
+previews, opinion and source outages remain digest-only. Enable/resume records a
+new observation watermark and generation; old stories are seeded silently. There
+is at most one initial enqueue and one substantive follow-up per event. Disable,
+pause, storage pressure, generation changes, removed companies, quiet time and
+expiry are rechecked before delivery. A news hold does not block other replies.
+Semantic enqueue identity survives restarts; Telegram response loss can still
+cause a duplicate delivery. Exactly-once Telegram delivery is not promised.
+
+The fixed labeled corpus is primarily synthetic; archived feed examples are
+separately labeled. Fixture attribution/ranking scores do not establish real-world
+coverage or predictive skill. Prospective quality evaluation and owner comparison
+remain separate from parser and transport checks. Paper results remain on demand,
+with no automatic paper/outcome summaries or hosted writer.
 
 ### Market outlook
 
@@ -277,9 +354,9 @@ aware. Briefings, market outlooks and monitoring use the verified exchange calen
 
 ## Persistence and retention
 
-Schema 11 includes company outcomes, immutable price endpoints, paper evidence and
-FX receipt observations alongside the existing ledger, news, decision snapshots
-and market outlooks. Existing immutable packets are not rewritten during upgrades.
+Schema 12 adds a separate presentation event audit, notification identities, UI
+sessions and typed message edits alongside company outcomes, immutable price
+endpoints, paper evidence, FX receipts, the real ledger, snapshots and outlooks. Existing immutable packets are not rewritten during upgrades.
 Financial transactions and their FX provenance do not expire with market history.
 
 | Data | Retention / bound |
@@ -293,7 +370,10 @@ Financial transactions and their FX provenance do not expire with market history
 | Company assessments / endpoints | Assessments expire with advice; shared endpoints survive pending consumers and paper marks; 16 KiB/4 KiB per packet |
 | Paper run / decisions / fills | Retained together for replay; 10,000 decisions or 16 MiB immutable JSON per run; 16 KiB per decision/fill, 64 KiB per batch; cap pauses processing before partial capture |
 | Paper FX observations | Seven days after pending orders terminate; consumed FX is copied into durable fills |
-| News and signal history | Bounded per-symbol/global caches with three-month historical expiry |
+| Legacy news / signal history | Existing bounded per-symbol/global caches and historical expiry; strategy inputs unchanged |
+| Presentation event audit | 14-day target; 1,000 evidence records globally / 100 per ticker, 250 roots / 4 revisions each; 8 KiB evidence / 4 KiB revision; 16 MiB combined serialized budget |
+| News delivery identities / aliases | 30 days, 2,000 compact keys combined; evidence expiry never deletes an identity |
+| UI tokens | 256 opaque owner/message-bound tokens, 24 hours |
 | Parsed public articles | 32 documents, 128 KiB each; six-hour refresh, seven-day expiry, one-hour negative cache |
 | Automatic database backups | Three retained plus one protected during deployment; three-month age limit |
 | Manual database backups | User-managed; never pruned automatically |

@@ -1,3 +1,3 @@
 """trabe: a small, outbound-only Telegram service."""
 
-__version__ = "0.8.13"
+__version__ = "0.9.3"

@@ -47,6 +47,7 @@ class Services:
             (self.portfolio_work, "portfolio-work"),
             (self.outcome_work, "company-outcomes"),
             (self.paper_work, "paper-execution"),
+            (self.news_event_work, "company-presentation"),
         ):
             thread = threading.Thread(target=target, daemon=True, name=name)
             thread.start()
@@ -166,3 +167,39 @@ class Services:
                 self.store.set_state(
                     "paper_error", "Paper processing failed/deferred; saved ledger retained."
                 )
+
+    def news_event_work(self):
+        from trabe.ledger import Ledger
+        from trabe.news_collection import EventCollector
+
+        while not self.stop.wait(30):
+            try:
+                now = time.time()
+                session = self.paper.calendar.at(now)
+                # New collection has lower priority than all pre-open captures.
+                if session and session.opens - 3700 <= now <= session.opens + 60:
+                    continue
+                settings = self.store.settings()
+                feature = "news" if settings["news_enabled"] == "on" else "briefing"
+                http = SignalHTTP(
+                    self.config,
+                    self.store,
+                    automatic=True,
+                    feature=feature,
+                    stop=self.stop,
+                    deadline=now + 90,
+                )
+                EventCollector(self.store, http).run_once(
+                    sorted(Ledger(self.store).coverage()), now
+                )
+                self.store.set_state("event_collection_error", "")
+            except WorkStopped:
+                pass
+            except Exception:
+                try:
+                    self.store.set_state(
+                        "event_collection_error",
+                        "Presentation collection deferred; legacy inputs unchanged.",
+                    )
+                except Exception:
+                    logger.warning("Presentation status deferred; retry scheduled.")

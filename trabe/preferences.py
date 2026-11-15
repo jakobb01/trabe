@@ -7,6 +7,11 @@ DEFAULTS = {
     "earnings_enabled": "off",
     "insiders_enabled": "off",
     "news_enabled": "off",
+    "news_alerts_enabled": "off",
+    "news_alert_daily_cap": "3",
+    "news_quiet_start": "22:00",
+    "news_quiet_end": "08:00",
+    "news_quiet_enabled": "on",
     "news_sources": "finnhub,yahoo",
     "news_second_view": "on",
     "massive_daily_budget": "200",
@@ -38,6 +43,11 @@ DESCRIPTIONS = {
     "earnings_enabled": "Automatic earnings checks and warnings: on or off",
     "insiders_enabled": "Automatic qualifying insider purchase alerts: on or off",
     "news_enabled": "Background company-news collection: on or off",
+    "news_alerts_enabled": "Opt-in material company-event pushes: on or off",
+    "news_alert_daily_cap": "Maximum company-event pushes per local day and rolling 24h, 0–10",
+    "news_quiet_start": "News quiet start, HH:MM in your timezone",
+    "news_quiet_end": "News quiet end, HH:MM in your timezone",
+    "news_quiet_enabled": "Defer material news during quiet hours: on or off",
     "news_sources": "Comma-separated sources: finnhub,yahoo,massive,marketaux; extra keys required",
     "news_second_view": "Show matched-story vendor sentiment cross-checks: on or off",
     "massive_daily_budget": "Maximum Massive request attempts per UTC day, 1–1000",
@@ -98,6 +108,8 @@ def validate_setting(key: str, value: str) -> str:
         "earnings_enabled",
         "insiders_enabled",
         "news_enabled",
+        "news_alerts_enabled",
+        "news_quiet_enabled",
         "news_second_view",
         "snapshot_enabled",
         "briefing_enabled",
@@ -107,6 +119,13 @@ def validate_setting(key: str, value: str) -> str:
     ):
         if value not in ("on", "off"):
             raise ValueError("Use on or off.")
+    elif key == "news_alert_daily_cap":
+        if not value.isascii() or not value.isdecimal() or not 0 <= int(value) <= 10:
+            raise ValueError("News alert cap must be 0–10.")
+        value = str(int(value))
+    elif key in ("news_quiet_start", "news_quiet_end"):
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("Use a local 24-hour time such as 22:00.")
     elif key == "earnings_warning_days":
         if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 14:
             raise ValueError("Earnings warning must be 1–14 calendar days.")

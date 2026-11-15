@@ -340,6 +340,7 @@ class News:
         from trabe.news_sources import INTERVALS, NewsSources
 
         selected = self.store.settings()["news_sources"].split(",")
+        event_generation = int(self.store.state("news_event_generation", "0"))
         adapters = NewsSources(self.http, self._normalize, text)
         result = {"refreshed": 0, "failed": 0, "items": 0}
         for symbol in dict.fromkeys(symbols):
@@ -427,6 +428,25 @@ class News:
                         items=len(items),
                         truncated=truncated,
                     )
+                    mirrored = self._mirror(
+                        enriched + items, symbol, provider, now, event_generation, truncated
+                    )
+                    if (
+                        mirrored
+                        and provider == "massive"
+                        and hasattr(adapters, "last_massive_response")
+                    ):
+                        try:
+                            from trabe.news_collection import EventCollector
+
+                            EventCollector(self.store, self.http).first_page(
+                                symbol, adapters.last_massive_response, now, event_generation
+                            )
+                        except Exception:
+                            self.store.set_state(
+                                "event_processing_error",
+                                "Continuation metadata unavailable; legacy collection succeeded.",
+                            )
                     successful = True
                     result["items"] += len(items)
                     health.update(source=provider, checked_at=now, last_success=now, error="")
@@ -474,16 +494,55 @@ class News:
                 result["refreshed" if successful else "failed"] += 1
         return result
 
+    def _mirror(self, items, symbol, provider, now, expected, truncated):
+        from trabe.news_event_store import EventStore, state
+
+        try:
+            mirrored = EventStore(self.store).ingest(
+                items,
+                symbol,
+                now,
+                source=provider,
+                expected_generation=expected,
+                guard=lambda db: (
+                    not float(state(db, "pause_until", "0")) > now
+                    and not state(db, "storage_paused")
+                    and not (getattr(self.http, "stop", None) and self.http.stop.is_set())
+                ),
+                collection={
+                    "state": "truncated"
+                    if truncated or provider in ("finnhub", "yahoo-rss", "marketaux")
+                    else "complete response",
+                    "gap": "Provider window/cap; real-world coverage unverified",
+                },
+            )
+            if mirrored:
+                self.store.set_state("event_processing_error", "")
+            return mirrored
+        except Exception:
+            # A presentation failure cannot reclassify a successful legacy refresh,
+            # including when a contended database also rejects the status write.
+            try:
+                self.store.set_state(
+                    "event_processing_error",
+                    "Presentation processing failed; legacy collection succeeded.",
+                )
+                EventStore(self.store).coverage(
+                    provider,
+                    symbol,
+                    now,
+                    state="processing gap",
+                    gap="Presentation processing failed; cached cards retained",
+                )
+            except Exception:
+                logger.warning(
+                    "Presentation processing/status deferred; legacy collection succeeded."
+                )
+            return False
+
     @staticmethod
     def _age(published, now):
-        minutes = max(0, int(now - published)) // 60
-        return (
-            f"{minutes}m"
-            if minutes < 60
-            else f"{minutes // 60}h"
-            if minutes < 1440
-            else f"{minutes // 1440}d"
-        )
+        return f"{max(0, int((now - published) // 3600))}h"
 
     def _card(self, symbol, view, now, *, detail=False, extracts=False):
         bias = view["bias"]
@@ -569,6 +628,15 @@ class News:
         return f"{symbol} • Additional article context • {News._age(group['published_at'], now)} ago\n{row['headline'][:160]}\nArticle extract: {row['snippet'][:240]}"
 
     def report(self, symbols, *, now):
+        from trabe.news_digest import NewsDigest
+
+        return (
+            NewsDigest(self.store).report(list(dict.fromkeys(symbols)), now)
+            + "\n"
+            + "\n".join(self._warnings(symbols, now))
+        )
+
+    def legacy_report(self, symbols, *, now):
         symbols = list(dict.fromkeys(symbols))
         held = Ledger(self.store).held()
         symbols.sort(key=lambda ticker: ticker not in held)
@@ -596,6 +664,11 @@ class News:
         return []
 
     def briefing(self, symbols, *, now, limit=3):
+        from trabe.news_digest import NewsDigest
+
+        return NewsDigest(self.store).briefing(symbols, now)
+
+    def legacy_briefing(self, symbols, *, now, limit=3):
         held = Ledger(self.store).held()
         selected = sorted(dict.fromkeys(symbols), key=lambda s: (s not in held, s))
         lines, extra, has_article = [], None, False

@@ -1,23 +1,34 @@
 """Durable settings, polling offset, watchlist, quote cache, and API budget."""
 
+import faulthandler
 import json
+import logging
 import os
 import sqlite3
+import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
+logger = logging.getLogger(__name__)
+_last_busy_trace = 0.0
+_connection_locks = WeakValueDictionary()
+_connection_locks_guard = threading.Lock()
 
 
 class Store(MarketStorage):
     def __init__(self, path: Path):
         from trabe.advisor import ADVISOR_SCHEMA
         from trabe.advisor_results import RESULTS_SCHEMA
+        from trabe.navigation import UI_SCHEMA
+        from trabe.news_event_store import EVENT_SCHEMA, EventStore
         from trabe.news_store import NEWS_SCHEMA, migrate_legacy
         from trabe.outlook import OUTLOOK_SCHEMA
         from trabe.paper_store import PAPER_SCHEMA, PaperStore
@@ -26,6 +37,13 @@ class Store(MarketStorage):
         from trabe.snapshots import SNAPSHOT_SCHEMA
 
         self.path = path
+        with _connection_locks_guard:
+            key = str(path.resolve())
+            lock = _connection_locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                _connection_locks[key] = lock
+            self._connection_lock = lock
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
@@ -86,6 +104,8 @@ class Store(MarketStorage):
                 *ENDPOINT_SCHEMA,
                 *RESULTS_SCHEMA,
                 *PAPER_SCHEMA,
+                *EVENT_SCHEMA,
+                *UI_SCHEMA,
             ):
                 db.execute(statement)
             trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
@@ -97,6 +117,16 @@ class Store(MarketStorage):
                 WHERE fx_rate IS NOT NULL AND (fx_from IS NULL OR fx_to IS NULL)""")
             if "kind" not in {row[1] for row in db.execute("PRAGMA table_info(outbox)")}:
                 db.execute("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'reply'")
+            outbox_columns = {row[1] for row in db.execute("PRAGMA table_info(outbox)")}
+            for name, definition in (
+                ("operation", "TEXT NOT NULL DEFAULT 'send'"),
+                ("message_id", "INTEGER"),
+                ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("retry_at", "REAL NOT NULL DEFAULT 0"),
+                ("fallback", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in outbox_columns:
+                    db.execute(f"ALTER TABLE outbox ADD COLUMN {name} {definition}")
             db.executemany("INSERT OR IGNORE INTO settings VALUES (?, ?)", DEFAULTS.items())
             if version < 11:
                 # Cache retrieval used to record request start, not receipt. Never backdate knowledge.
@@ -108,18 +138,36 @@ class Store(MarketStorage):
                         PaperStore.observe_fx(db, day, rate, effective, provider, observed_at)
                     except ValueError:
                         pass
+            if version < 12:
+                EventStore(self).seed(db, time.time())
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @contextmanager
     def connection(self):
-        # sqlite3's own context manager commits but does not close connections.
-        db = sqlite3.connect(self.path, timeout=10)
-        db.execute("PRAGMA foreign_keys=ON")
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
+        # One process owns the service DB. Serialize its short transactions so
+        # concurrent worker commits cannot form a SQLite busy-lock convoy.
+        # Reentrant access preserves existing nested cached reads.
+        with self._connection_lock:
+            # sqlite3's own context manager commits but does not close connections.
+            db = sqlite3.connect(self.path, timeout=10)
+            db.execute("PRAGMA foreign_keys=ON")
+            try:
+                with db:
+                    yield db
+            except sqlite3.OperationalError as error:
+                if "locked" in str(error).lower():
+                    global _last_busy_trace
+                    tick = time.monotonic()
+                    if tick - _last_busy_trace >= 60:
+                        _last_busy_trace = tick
+                        logger.error("SQLite lock timeout; bounded thread diagnostic follows.")
+                        try:
+                            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                        except (OSError, ValueError, AttributeError):
+                            pass
+                raise
+            finally:
+                db.close()
 
     def settings(self, db=None) -> dict[str, str]:
         if db is None:
@@ -131,24 +179,32 @@ class Store(MarketStorage):
         value = validate_setting(key, value)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
-            if key in {"paper_enabled", "advisor_results_enabled"}:
-                generation = key.removesuffix("_enabled") + "_generation"
-                db.execute(
-                    "INSERT INTO state VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
-                    (generation,),
-                )
-            if key == "paper_enabled" and value == "off":
-                from trabe.paper_store import PaperStore
+            self.apply_setting(db, key, value)
 
-                PaperStore.cancel_pending(db, "paper_disabled")
-                db.execute("UPDATE paper_run_state SET status='paused' WHERE status='active'")
-                db.execute(
-                    "UPDATE paper_session_state SET state='cancelled',reason='paper_disabled' WHERE state='preparing'"
-                )
-                db.execute(
-                    "UPDATE signal_jobs SET status='cancelled' WHERE status IN ('pending','running') AND kind='paper_prepare'"
-                )
+    def apply_setting(self, db, key, value):
+        value = validate_setting(key, value)
+        db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
+        if key in {"paper_enabled", "advisor_results_enabled"}:
+            generation = key.removesuffix("_enabled") + "_generation"
+            db.execute(
+                "INSERT INTO state VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
+                (generation,),
+            )
+        if key == "paper_enabled" and value == "off":
+            from trabe.paper_store import PaperStore
+
+            PaperStore.cancel_pending(db, "paper_disabled")
+            db.execute("UPDATE paper_run_state SET status='paused' WHERE status='active'")
+            db.execute(
+                "UPDATE paper_session_state SET state='cancelled',reason='paper_disabled' WHERE state='preparing'"
+            )
+            db.execute(
+                "UPDATE signal_jobs SET status='cancelled' WHERE status IN ('pending','running') AND kind='paper_prepare'"
+            )
+        if key in {"news_enabled", "news_sources", "briefing_enabled", "news_alerts_enabled"}:
+            from trabe.news_event_store import invalidate
+
+            invalidate(db, time.time(), "settings_changed")
 
     def state(self, key: str, default: str = "") -> str:
         with self.connection() as db:
@@ -157,7 +213,10 @@ class Store(MarketStorage):
 
     def set_state(self, key: str, value: str):
         with self.connection() as db:
-            db.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, value))
+            db.execute(
+                "INSERT INTO state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE state.value!=excluded.value",
+                (key, value),
+            )
 
     def watchlist(self, db=None) -> list[tuple[str, int]]:
         if db is None:

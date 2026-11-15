@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from trabe.api import ApiError, Telegram
 from trabe.outbox import Outbox
-from trabe.presentation import message_entities
+from trabe.presentation import display_text, message_entities
 from trabe.store import Store
 
 
@@ -69,6 +69,43 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(payloads[1]["reply_markup"], keyboard)
         self.assertNotIn("parse_mode", payloads[1])
         self.assertIn("entities", payloads[1])
+
+    def test_owner_preference_removes_url_lines_and_boilerplate_but_keeps_real_warnings(self):
+        raw = "NVDA • update\nSource: https://example.com/story\nCoverage is partial; /news sources for collection status.\nSource URL: <https://example.com/source>\nCompany says demand is uncertain.\nKnown source outage: HTTP 503.\n[Named publication](https://publisher.example/news)\nPortfolio partial; missing values excluded."
+        rendered = display_text(raw)
+        self.assertNotIn("https://", rendered)
+        self.assertNotIn("Coverage is partial", rendered)
+        self.assertNotIn("Source URL:", rendered)
+        self.assertIn("Company says demand is uncertain.", rendered)
+        self.assertIn("Known source outage: HTTP 503.", rendered)
+        self.assertIn("Named publication", rendered)
+        self.assertIn("Portfolio partial; missing values excluded.", rendered)
+
+    def test_sender_and_edit_strip_urls_from_old_queued_messages_and_rebase_entities(self):
+        payloads = []
+
+        def transport(url, payload, **kwargs):
+            payloads.append(payload)
+            return {"ok": True, "result": {"message_id": 1}}
+
+        raw = "📰 News\nSource: https://example.com/old\nCoverage is partial.\nNVDA • Price impact unknown."
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "old.db")
+            with store.connection() as db:
+                db.execute(
+                    "INSERT INTO outbox(chat_id,text,created_at,kind) VALUES (123,?,9999999999,'reply')",
+                    (raw,),
+                )
+            sender = Telegram("fixture", transport)
+            with patch("trabe.api.time.sleep"):
+                Outbox(store).flush(sender)
+                sender.edit(123, 1, raw)
+        self.assertEqual(len(payloads), 2)
+        for payload in payloads:
+            self.assertNotIn("http", payload["text"])
+            self.assertNotIn("Coverage is partial", payload["text"])
+            for entity in payload.get("entities", []):
+                styled_text(payload["text"], entity)
 
     def test_long_messages_keep_chunk_limits_and_rebase_entities_after_emoji(self):
         payloads = []

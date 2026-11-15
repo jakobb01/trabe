@@ -158,7 +158,7 @@ class SourceTests(unittest.TestCase):
         news = News(self.store, http)
         self.assertEqual(news.refresh(["VST"], now=self.now)["items"], 0)
         self.assertIn("key missing", news.sources_status(["VST"]))
-        self.assertIn("No clear signal", news.report(["VST"], now=self.now))
+        self.assertIn("No clear signal", news.legacy_report(["VST"], now=self.now))
 
 
 if __name__ == "__main__":

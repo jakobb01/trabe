@@ -1,12 +1,15 @@
 """Single-process polling, independent liveness, background scans and shutdown."""
 
+import faulthandler
 import logging
 import os
 import queue
 import signal
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -70,7 +73,15 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
     outbox = Outbox(store)
     market = market or MarketRouter(config, store)
     services = Services(store, config, market, outbox, telegram)
-    bot = Bot(config, store, outbox, market, monitor=services.monitor, insights=services.insights)
+    bot = Bot(
+        config,
+        store,
+        outbox,
+        market,
+        monitor=services.monitor,
+        insights=services.insights,
+        callback_responder=telegram,
+    )
     stop = stop_event if stop_event is not None else threading.Event()
     old_handlers = {}
     if threading.current_thread() is threading.main_thread():
@@ -79,6 +90,7 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
     try:
         me = telegram.call("getMe")
         bot.username = me["username"]
+        bot.bot_id = me.get("id")
         if telegram.call("getWebhookInfo").get("url"):
             raise ValueError(
                 "This bot has an active webhook. Use a dedicated bot or remove its webhook before starting."
@@ -134,6 +146,19 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
                     stop.wait(min(60, max(0, until - time.monotonic())))
                     store.set_state("heartbeat", str(time.time()))
                 backoff = min(backoff * 2, 60)
+    except (ApiError, ValueError):
+        raise
+    except Exception as error:
+        # Print code locations and thread stacks, never exception values/locals.
+        logger.error(
+            "Runtime failure type: %s; diagnostic code locations follow.", type(error).__name__
+        )
+        traceback.print_tb(error.__traceback__, file=sys.stderr)
+        try:
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        except (OSError, ValueError, AttributeError):
+            pass
+        raise
     finally:
         bot.scans.close()
         services.close()

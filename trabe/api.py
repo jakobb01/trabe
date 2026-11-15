@@ -11,15 +11,16 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from trabe import __version__
-from trabe.presentation import message_entities
+from trabe.presentation import display_text, message_entities
 from trabe.store import Store
 
 
 class ApiError(Exception):
-    def __init__(self, message: str, code: int = 0, retry_after: int = 0):
+    def __init__(self, message: str, code: int = 0, retry_after: int = 0, reason: str = ""):
         super().__init__(message)
         self.code = code
         self.retry_after = retry_after
+        self.reason = reason
 
 
 def message_chunks(text: str, max_units: int = 3500):
@@ -68,8 +69,23 @@ def request_json(
                 )
             except (ValueError, TypeError, AttributeError):
                 retry_after = 30
+        reason = ""
+        if error.code == 400 and url.endswith("editMessageText"):
+            try:
+                description = str(json.loads(error.read(16_384)).get("description", "")).lower()
+                if "message is not modified" in description:
+                    reason = "not_modified"
+                elif (
+                    "message to edit not found" in description
+                    or "message can't be edited" in description
+                ):
+                    reason = "uneditable"
+            except (ValueError, TypeError, AttributeError):
+                pass
         error.close()
-        raise ApiError(f"Upstream HTTP error {error.code}.", error.code, retry_after) from None
+        raise ApiError(
+            f"Upstream HTTP error {error.code}.", error.code, retry_after, reason
+        ) from None
     except (URLError, TimeoutError, OSError):
         raise ApiError("Network request failed or timed out.") from None
     except (ValueError, UnicodeError):
@@ -87,11 +103,25 @@ class Telegram:
         result = self.transport(self._base + method, payload, timeout=40)
         if result.get("ok") is not True:
             # Telegram descriptions can reflect submitted content; keep them private.
-            raise ApiError("Telegram rejected the request.", int(result.get("error_code", 0)))
+            description = str(result.get("description", "")).lower()
+            reason = ""
+            if method == "editMessageText":
+                if "message is not modified" in description:
+                    reason = "not_modified"
+                elif (
+                    "message to edit not found" in description
+                    or "message can't be edited" in description
+                ):
+                    reason = "uneditable"
+            raise ApiError(
+                "Telegram rejected the request.", int(result.get("error_code", 0)), reason=reason
+            )
         return result.get("result")
 
     def send(self, chat_id: int, text: str, *, reply_markup: dict | None = None):
         # Native entities style plain text safely, including older queued replies.
+        text = display_text(text)
+        first_result = None
         with self._send_lock:
             for index, chunk in enumerate(message_chunks(text)):
                 delay = self._next_send - time.monotonic()
@@ -108,13 +138,44 @@ class Telegram:
                 if index == 0 and reply_markup is not None:
                     payload["reply_markup"] = reply_markup
                 try:
-                    self.call("sendMessage", **payload)
+                    result = self.call("sendMessage", **payload)
+                    if index == 0:
+                        first_result = result
                 finally:
                     self._next_send = time.monotonic() + 1.05
 
+        return first_result
+
+    def answer_callback(self, query_id, text=""):
+        # Deliberately independent of the send/edit rate limiter.
+        return self.call("answerCallbackQuery", callback_query_id=query_id, text=text)
+
+    def edit(self, chat_id, message_id, text, *, reply_markup=None):
+        text = display_text(text)
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "link_preview_options": {"is_disabled": True},
+            "entities": message_entities(text),
+            "reply_markup": reply_markup or {"inline_keyboard": []},
+        }
+        with self._send_lock:
+            delay = self._next_send - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                return self.call("editMessageText", **payload)
+            finally:
+                self._next_send = time.monotonic() + 1.05
+
     def updates(self, offset: int, timeout: int = 25):
         result = self.call(
-            "getUpdates", offset=offset, timeout=timeout, allowed_updates=["message"], limit=20
+            "getUpdates",
+            offset=offset,
+            timeout=timeout,
+            allowed_updates=["message", "callback_query"],
+            limit=20,
         )
         if not isinstance(result, list):
             raise ApiError("Telegram returned an unexpected update list.")

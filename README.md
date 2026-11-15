@@ -15,11 +15,14 @@ outbound; no website, webhook or exposed application port is needed.
 - Compact briefings with premarket prices, SPY/QQQ, VIX and details on demand.
 - Saved pre-open market outlooks with separate later assessments.
 - Five-session company research with frozen evidence and explicit data gaps.
-- Telegram's expandable command menu, without a persistent reply keyboard.
+- Inline Today / Companies / Portfolio / Settings cards and a six-command menu.
+- Company-event digests with named sources, issuer feeds and opt-in material news alerts.
+- Silent company outcome scoring and a separate USD 2,000 paper experiment.
 
 Outlooks, sentiment and company research use unvalidated rules. Missing or stale
-inputs remain explicit. Company outcome scoring and paper trading are planned.
-Current version: **0.8.11**, database schema **9**.
+inputs remain explicit. News presentation uses local rules with no hosted model or
+new recurring API cost. News alerts default off.
+Current version: **0.9.3**, database schema **12**.
 
 ## Get started
 
@@ -38,7 +41,7 @@ Current version: **0.8.11**, database schema **9**.
    [.env.deploy.example](.env.deploy.example) to `.env.deploy` and configure SSH.
 4. Follow the host prerequisites in the [project guide](docs/guide.md#deployment),
    then deploy with `bash scripts/deploy.sh`.
-5. In Telegram, open the command menu or send `/help`. Add your symbols and enable
+5. In Telegram, open `/home` or the command menu. Add your symbols and enable
    the automations you want; new installations start with automation off.
 
 Credentials and runtime data stay outside Git. Use only one running instance per
@@ -48,6 +51,9 @@ bot token; develop with fixtures while the Pi is polling.
 
 | Command | Purpose |
 | --- | --- |
+| `/home`, `/help advanced` | Inline navigation and all advanced commands |
+| `/news cached VST`, `/news sources` | Sourced cached developments and coverage gaps |
+| `/set news_alerts_enabled on` | Opt into fresh material news (also requires `/news on`) |
 | `/add VST`, `/watchlist` | Manage watched symbols |
 | `/buy VST 2 100 USD`, `/portfolio` | Record an executed trade and inspect holdings |
 | `/monitor on`, `/alerts` | Enable monitoring and inspect alert rules |

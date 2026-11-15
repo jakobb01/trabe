@@ -246,8 +246,9 @@ class SignalTests(unittest.TestCase):
         self.assertEqual(self.store.provider_usage("finnhub"), 0)
         with patch("trabe.insights.time.time", return_value=self.now):
             self.insights.process_job()
+            self.assertIn("No current material", self.insights.handle("news", ["cached", "GOOGL"]))
             self.assertIn(
-                "Company raises guidance", self.insights.handle("news", ["cached", "GOOGL"])
+                "Company raises guidance", self.insights.handle("news", ["details", "GOOGL"])
             )
         self.assertIn("queued", self.insights.handle("news", ["NVDA"]))
 
@@ -410,7 +411,8 @@ class SignalTests(unittest.TestCase):
         self.insights.queue("earnings", ["VST"])
         with patch("trabe.insights.time.time", return_value=self.now):
             self.assertTrue(self.insights.run_once(self.now))
-        self.assertIn("2026-11-06", self.insights.handle("earnings", ["cached", "VST"]))
+        with patch("trabe.insights.time.time", return_value=self.now):
+            self.assertIn("2026-11-06", self.insights.handle("earnings", ["cached", "VST"]))
 
 
 if __name__ == "__main__":

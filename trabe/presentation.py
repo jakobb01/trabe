@@ -45,6 +45,35 @@ LABEL = re.compile(
 COMMAND = re.compile(r"(?<![\w/])/[a-z][a-z_]*(?:@[A-Za-z0-9_]+)?")
 
 
+URL = re.compile(r"\b(?:https?://|www\.)[^\s<>]+", re.I)
+MARKDOWN_LINK = re.compile(r"\[([^]\n]+)\]\(https?://[^)\n]+\)", re.I)
+
+
+def display_text(text):
+    """Owner preference: no source URLs, including legacy queued messages."""
+    lines = []
+    for line in text.splitlines():
+        if (
+            line.strip()
+            .lower()
+            .startswith(("coverage is partial", "source coverage remains partial"))
+        ):
+            continue
+        clean = MARKDOWN_LINK.sub(r"\1", line)
+        clean = URL.sub("", clean)
+        clean = re.sub(r"[ \t]{2,}", " ", clean).strip()
+        clean = re.sub(r"\(\s*\)|\[\s*\]|<\s*>", "", clean).strip(" •|\t")
+        if re.fullmatch(
+            r"(?:source(?: url)?|sources|input sources|original source|original|link|article|filing|additional source(?: \(may be syndicated\))?)\s*:?[. ]*",
+            clean,
+            re.I,
+        ):
+            continue
+        if clean or not line.strip():
+            lines.append(clean)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def message_entities(text):
     """Apply a small, consistent hierarchy without changing any message content."""
     spans = []

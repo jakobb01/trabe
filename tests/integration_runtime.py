@@ -25,6 +25,7 @@ class RuntimeHttpTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.path = Path(self.temporary.name)
         self.messages, self.updates, self.market_calls = [], [], []
+        self.callback_acks, self.edits = [], []
         self.market_arrivals = []
         self.guard = threading.Lock()
         fixture = self
@@ -52,6 +53,15 @@ class RuntimeHttpTests(unittest.TestCase):
                     time.sleep(0.03)
                     with fixture.guard:
                         result = [u for u in fixture.updates if u["update_id"] >= payload["offset"]]
+                elif method == "answerCallbackQuery":
+                    with fixture.guard:
+                        fixture.callback_acks.append(payload)
+                    result = True
+                elif method == "editMessageText":
+                    with fixture.guard:
+                        fixture.edits.append(payload)
+                        fixture.messages.append(payload)
+                    result = {"message_id": payload["message_id"]}
                 elif method == "sendMessage":
                     with fixture.guard:
                         fixture.messages.append(payload)
@@ -153,6 +163,43 @@ class RuntimeHttpTests(unittest.TestCase):
             self.push(6, "Status")
             self.wait_text("Watchlist scan #1")
             self.wait_text("Uptime:")
+            self.push(7, "/home")
+            self.wait_text("Your cached market briefing")
+            store = Store(self.path / "agent.db")
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                with store.connection() as db:
+                    token = db.execute(
+                        "SELECT token,message_id FROM ui_tokens WHERE action='companies' AND message_id IS NOT NULL LIMIT 1"
+                    ).fetchone()
+                if token:
+                    break
+                time.sleep(0.01)
+            self.assertIsNotNone(token)
+            with self.guard:
+                self.updates.append(
+                    {
+                        "update_id": 8,
+                        "callback_query": {
+                            "id": "fixture-query",
+                            "from": {"id": 123},
+                            "data": "n:" + token[0],
+                            "message": {
+                                "message_id": token[1],
+                                "date": int(time.time()),
+                                "chat": {"id": 123, "type": "private"},
+                                "from": {"id": 100, "is_bot": True},
+                            },
+                        },
+                    }
+                )
+            self.wait_text("Companies • held and watched")
+            self.assertEqual(
+                self.callback_acks, [{"callback_query_id": "fixture-query", "text": ""}]
+            )
+            self.assertEqual(len(self.edits), 1)
+            self.assertIn("inline_keyboard", self.edits[0]["reply_markup"])
+            self.assertTrue(self.edits[0]["entities"])
         finally:
             self.stop_runtime()
         store = Store(self.path / "agent.db")
@@ -164,14 +211,14 @@ class RuntimeHttpTests(unittest.TestCase):
         count = len(self.market_calls)
         self.start_runtime()
         try:
-            self.push(7, "/quote IBM")
-            self.push(8, "/settings")
+            self.push(9, "/quote IBM")
+            self.push(10, "/settings")
             self.wait_text("quote_cache_minutes = 120")
             self.wait_text("Alpha Vantage, cached")
         finally:
             self.stop_runtime()
         self.assertEqual(len(self.market_calls), count)
-        self.assertEqual(store.state("telegram_offset"), "9")
+        self.assertEqual(store.state("telegram_offset"), "11")
         self.assertEqual(store.state("heartbeat"), "0")
 
     def test_two_fresh_symbols_succeed_with_a_one_request_per_second_provider(self):

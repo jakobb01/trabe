@@ -122,7 +122,10 @@ class BriefingTimeTests(unittest.TestCase):
         self.assertEqual(self.box.pending(), 0)
 
     def test_timezone_change_during_render_cannot_enqueue_old_schedule(self):
-        def render(*args):
+        def render(*args, news_samples):
+            news_samples.append(
+                {"ticker": "VST", "source": {}, "current": {"card": "old schedule"}}
+            )
             self.store.set_setting("timezone", "Pacific/Auckland")
             return "stale timezone briefing"
 
@@ -130,6 +133,10 @@ class BriefingTimeTests(unittest.TestCase):
             self.insights.scheduled_briefing(["VST"], stamp("2026-11-04T12:00:00+00:00"))
         self.assertEqual(self.box.pending(), 0)
         self.assertFalse(self.repo.notified("briefing", "daily:2026-11-04"))
+        with self.store.connection() as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM news_summary_samples").fetchone()[0], 0
+            )
 
     def test_default_calendar_description_remains_compatible(self):
         now = stamp("2026-11-04T12:00:00+00:00")

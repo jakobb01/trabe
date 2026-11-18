@@ -35,6 +35,16 @@ RESULTS_SCHEMA = (
         WHEN EXISTS(SELECT 1 FROM advisor_evaluations WHERE advice_id=NEW.advice_id)
         BEGIN SELECT RAISE(ABORT,'Company assessments cannot be replaced'); END""",
 )
+SHADOW_RESULTS_SCHEMA = (
+    *(
+        sql.replace("advisor_", "shadow_advisor_").replace(
+            "company_advice", "shadow_company_advice"
+        )
+        for sql in RESULTS_SCHEMA
+    ),
+    """CREATE INDEX IF NOT EXISTS shadow_advisor_inputs_pending
+        ON shadow_advisor_outcome_inputs(state,symbol,session_date,edge)""",
+)
 
 
 def record_id(value):
@@ -44,9 +54,14 @@ def record_id(value):
 
 
 class AdvisorResults:
-    def __init__(self, store, calendar=None, *, clock=time.time):
+    def __init__(self, store, calendar=None, *, clock=time.time, shadow=False):
         self.store, self.calendar, self.clock = store, calendar or USCalendar(), clock
         self.endpoints = EndpointStore(store, self.calendar)
+        self.feature = "advisor_shadow" if shadow else "advisor_results"
+        self.advice = "shadow_company_advice" if shadow else "company_advice"
+        self.inputs = "shadow_advisor_outcome_inputs" if shadow else "advisor_outcome_inputs"
+        self.evaluations = "shadow_advisor_evaluations" if shadow else "advisor_evaluations"
+        self.shadow = shadow
 
     def _sessions(self, packet):
         try:
@@ -94,10 +109,21 @@ class AdvisorResults:
     def ensure_pending(self, *, now, limit=16):
         with self.store.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            if not enabled(self.store, db, "advisor_results", now):
+            if not enabled(self.store, db, self.feature, now):
                 return 0
+            # An abstention has no score. Keep the frozen gaps without spending the
+            # shared endpoint budget on those automated rows.
+            scorable = (
+                "AND json_extract(a.payload,'$.forecast.direction')!='insufficient'"
+                if self.shadow
+                else ""
+            )
             rows = db.execute(
-                "SELECT a.payload,a.sha256 FROM company_advice a LEFT JOIN advisor_evaluations e ON e.advice_id=a.id WHERE e.advice_id IS NULL AND (SELECT COUNT(*) FROM advisor_outcome_inputs i WHERE i.advice_id=a.id)!=4 ORDER BY a.as_of,a.id LIMIT ?",
+                f"""SELECT a.payload,a.sha256 FROM {self.advice} a
+                LEFT JOIN {self.evaluations} e ON e.advice_id=a.id
+                WHERE e.advice_id IS NULL {scorable}
+                AND (SELECT COUNT(*) FROM {self.inputs} i WHERE i.advice_id=a.id)!=4
+                ORDER BY a.as_of,a.id LIMIT ?""",
                 (min(16, max(1, limit)),),
             ).fetchall()
             for row in rows:
@@ -113,7 +139,7 @@ class AdvisorResults:
                         expected = session.opens if edge == "open" else session.closes - 60
                         ready = session.opens + 300 if edge == "open" else session.closes + 1800
                         db.execute(
-                            "INSERT OR IGNORE INTO advisor_outcome_inputs VALUES (?,?,?,?,?,?,?,?,?,NULL,?)",
+                            f"INSERT OR IGNORE INTO {self.inputs} VALUES (?,?,?,?,?,?,?,?,?,NULL,?)",
                             (
                                 packet["id"],
                                 role,
@@ -129,17 +155,16 @@ class AdvisorResults:
                         )
             return len(rows)
 
-    @staticmethod
-    def _save(db, value):
+    def _save(self, db, value):
         if db.execute(
-            "SELECT 1 FROM advisor_evaluations WHERE advice_id=?", (value["advice_id"],)
+            f"SELECT 1 FROM {self.evaluations} WHERE advice_id=?", (value["advice_id"],)
         ).fetchone():
             return
         raw = encoded(value)
         if len(raw.encode()) > 16384:
             raise ValueError("Company assessment exceeds 16 KiB.")
         db.execute(
-            "INSERT INTO advisor_evaluations VALUES (?,?,?,?,?,?)",
+            f"INSERT INTO {self.evaluations} VALUES (?,?,?,?,?,?)",
             (
                 value["advice_id"],
                 value["evaluated_at"],
@@ -153,10 +178,10 @@ class AdvisorResults:
     def _advance(self, now):
         with self.store.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            if not enabled(self.store, db, "advisor_results", now):
+            if not enabled(self.store, db, self.feature, now):
                 return
             refs = db.execute(
-                "SELECT advice_id,role,edge,symbol,session_date,expires_at FROM advisor_outcome_inputs WHERE state='pending' ORDER BY expires_at,advice_id,role,edge"
+                f"SELECT advice_id,role,edge,symbol,session_date,expires_at FROM {self.inputs} WHERE state='pending' ORDER BY expires_at,advice_id,role,edge"
             ).fetchall()
             for advice_id, role, edge, symbol, day, expires in refs:
                 value = self.endpoints.get(symbol, day, edge, db=db)
@@ -166,23 +191,28 @@ class AdvisorResults:
                         (SOURCE, symbol, day, edge, METHOD),
                     ).fetchone()[0]
                     db.execute(
-                        "UPDATE advisor_outcome_inputs SET state='saved',endpoint_id=? WHERE advice_id=? AND role=? AND edge=?",
+                        f"UPDATE {self.inputs} SET state='saved',endpoint_id=? WHERE advice_id=? AND role=? AND edge=?",
                         (endpoint, advice_id, role, edge),
                     )
                 elif now >= expires:
                     db.execute(
-                        "UPDATE advisor_outcome_inputs SET state='missing',last_error='Exact endpoint missing after seven-day retry cutoff' WHERE advice_id=? AND role=? AND edge=?",
+                        f"UPDATE {self.inputs} SET state='missing',last_error='Exact endpoint missing after seven-day retry cutoff' WHERE advice_id=? AND role=? AND edge=?",
                         (advice_id, role, edge),
                     )
             rows = db.execute(
-                "SELECT a.payload,a.sha256 FROM company_advice a LEFT JOIN advisor_evaluations e ON e.advice_id=a.id WHERE e.advice_id IS NULL AND a.target_close+1800<=? AND (SELECT COUNT(*) FROM advisor_outcome_inputs i WHERE i.advice_id=a.id)=4 AND NOT EXISTS(SELECT 1 FROM advisor_outcome_inputs i WHERE i.advice_id=a.id AND i.state='pending') ORDER BY a.target_close LIMIT 16",
+                f"""SELECT a.payload,a.sha256 FROM {self.advice} a
+                LEFT JOIN {self.evaluations} e ON e.advice_id=a.id
+                WHERE e.advice_id IS NULL AND a.target_close+1800<=?
+                AND (SELECT COUNT(*) FROM {self.inputs} i WHERE i.advice_id=a.id)=4
+                AND NOT EXISTS(SELECT 1 FROM {self.inputs} i WHERE i.advice_id=a.id AND i.state='pending')
+                ORDER BY a.target_close LIMIT 16""",
                 (now,),
             ).fetchall()
             for row in rows:
                 packet = self.unpack(row)
                 observations = {}
                 for role, edge, payload, sha, error in db.execute(
-                    "SELECT i.role,i.edge,p.payload,p.sha256,i.last_error FROM advisor_outcome_inputs i LEFT JOIN market_price_endpoints p ON p.id=i.endpoint_id WHERE i.advice_id=?",
+                    f"SELECT i.role,i.edge,p.payload,p.sha256,i.last_error FROM {self.inputs} i LEFT JOIN market_price_endpoints p ON p.id=i.endpoint_id WHERE i.advice_id=?",
                     (packet["id"],),
                 ):
                     observations[role + "/" + edge] = (
@@ -191,19 +221,24 @@ class AdvisorResults:
                 self._save(db, self.assess(packet, observations, evaluated_at=now))
 
     def run_once(self, http, *, now):
+        return bool(self.collect(http, now=now, limit=2))
+
+    def collect(self, http, *, now, limit):
         with self.store.connection() as db:
-            if not enabled(self.store, db, "advisor_results", now):
-                return False
+            if not enabled(self.store, db, self.feature, now):
+                return 0
         self.ensure_pending(now=now)
         self._advance(now)
+        if not limit:
+            return 0
         with self.store.connection() as db:
             due = db.execute(
-                "SELECT symbol,session_date,GROUP_CONCAT(DISTINCT edge) FROM (SELECT * FROM advisor_outcome_inputs WHERE state='pending' AND ready_at<=? AND expires_at>? ORDER BY expires_at,advice_id,role,edge) GROUP BY symbol,session_date ORDER BY MIN(expires_at),MIN(advice_id),symbol",
+                f"SELECT symbol,session_date,GROUP_CONCAT(DISTINCT edge) FROM (SELECT * FROM {self.inputs} WHERE state='pending' AND ready_at<=? AND expires_at>? ORDER BY expires_at,advice_id,role,edge) GROUP BY symbol,session_date ORDER BY MIN(expires_at),MIN(advice_id),symbol",
                 (now, now),
             ).fetchall()
         attempts = 0
         for symbol, day, edges in due:
-            if attempts >= 2:
+            if attempts >= limit:
                 break
             session = self.calendar.session(date.fromisoformat(day))
             if not session:
@@ -215,7 +250,7 @@ class AdvisorResults:
                         symbol,
                         session,
                         edges.split(","),
-                        feature="advisor_results",
+                        feature=self.feature,
                         now=now,
                         clock=self.clock,
                     )
@@ -223,7 +258,7 @@ class AdvisorResults:
             except ApiError:
                 attempts += 1
         self._advance(max(now, self.clock()))
-        return bool(attempts)
+        return attempts
 
     def assess(self, packet, observations, *, evaluated_at):
         gaps, returns = [], {}
@@ -383,19 +418,11 @@ class AdvisorResults:
                     + "\n"
                     + self.status(db)
                 )
-            rows = db.execute(
-                "SELECT a.payload,a.sha256,e.payload,e.sha256 FROM company_advice a LEFT JOIN advisor_evaluations e ON e.advice_id=a.id"
-                + (" WHERE a.ticker=?" if ticker else "")
-                + " ORDER BY a.as_of LIMIT 256",
-                (ticker,) if ticker else (),
-            ).fetchall()
             counts = dict.fromkeys(
                 ("pending", "scored", "abstained", "unscorable", "unsupported"), 0
             )
             eligible, dates, compared = [], [], []
-            for raw, sha, result_raw, result_sha in rows:
-                packet = self.unpack((raw, sha))
-                result = checked((result_raw, result_sha)) if result_raw else None
+            for packet, result in self.saved(db, ticker):
                 if not self.supported(packet):
                     counts["unsupported"] += 1
                     continue
@@ -425,8 +452,18 @@ class AdvisorResults:
                 "Overlapping windows are not independent samples; hit rate is not profit.",
                 QUALITY,
                 self.status(db),
+                f"Prospective comparison: /advisor compare{(' ' + ticker) if ticker else ''}",
             ]
             return "\n".join(lines)
+
+    def saved(self, db, ticker):
+        for raw, sha, result_raw, result_sha in db.execute(
+            f"SELECT a.payload,a.sha256,e.payload,e.sha256 FROM {self.advice} a LEFT JOIN {self.evaluations} e ON e.advice_id=a.id"
+            + (" WHERE a.ticker=?" if ticker else "")
+            + " ORDER BY a.as_of,a.id",
+            (ticker,) if ticker else (),
+        ):
+            yield self.unpack((raw, sha)), checked((result_raw, result_sha)) if result_raw else None
 
     def status(self, db=None):
         if db is None:

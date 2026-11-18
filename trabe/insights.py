@@ -384,7 +384,7 @@ class Insights:
             + "\nMore data is cached; request a specific ticker for details."
         )
 
-    def render_briefing(self, symbols, now):
+    def render_briefing(self, symbols, now, *, news_samples=None):
         """One-message overview; complete evidence cards remain in the cached details."""
         from trabe.outlook import OutlookService
 
@@ -416,7 +416,9 @@ class Insights:
             + (" • stale position prices; see /portfolio" if stale else "")
         )
         sections.append("Company developments")
-        sections.extend(self.feature("news").briefing(symbols, now=now, limit=3))
+        sections.extend(
+            self.feature("news").briefing(symbols, now=now, limit=3, samples=news_samples)
+        )
         news = self.market_news().briefing(now=now)
         statuses = self.repo.status("market-news")
         if not statuses:
@@ -468,6 +470,8 @@ class Insights:
                 omitted = True
         if omitted:
             selected.append("Some sections exceed this overview; read /briefing details.")
+        if news_samples is not None:
+            news_samples[:] = [s for s in news_samples if s["current"]["card"] in selected]
         return "\n\n".join([*selected, footer])
 
     def render_briefing_details(self, symbols, now):
@@ -588,6 +592,8 @@ class Insights:
             )
 
     def scheduled_briefing(self, symbols, now):
+        from trabe.news_event_store import save_briefing_samples
+
         settings = self.store.settings()
         if settings["briefing_enabled"] != "on" or self.store.automation_paused(now):
             return
@@ -620,13 +626,30 @@ class Insights:
                 self.store.set_state(waiting_key, str(now))
             return
         # Incomplete sections remain explicit instead of inventing freshness.
-        text = self.render_briefing(symbols, now)
+        news_samples = []
+        text = self.render_briefing(symbols, now, news_samples=news_samples)
         with self.store.connection() as db:
             watermarks = dict(
                 db.execute(
                     "SELECT key,value FROM state WHERE key IN ('insiders_enabled_at','earnings_enabled_at','insights_resumed_at','pause_until')"
                 )
             )
+
+        def validate_and_sample(db):
+            if not self._coherent(db, settings, symbols, watermarks):
+                return False
+            # notify_once already holds the write lock. Check the claim before
+            # sampling so a simultaneous retry cannot store a different card.
+            if (
+                news_samples
+                and not db.execute(
+                    "SELECT 1 FROM signal_notifications WHERE kind='briefing' AND event_key=?",
+                    (key,),
+                ).fetchone()
+            ):
+                save_briefing_samples(db, key, now, news_samples)
+            return True
+
         if self.repo.notify_once(
             self.config.owner_id,
             "briefing",
@@ -634,14 +657,19 @@ class Insights:
             text,
             now=now,
             setting="briefing_enabled",
-            validator=lambda db: self._coherent(db, settings, symbols, watermarks),
+            validator=validate_and_sample,
         ):
             self.repo.put(
                 "briefing",
                 key,
                 "",
                 "trabe",
-                {"as_of": now, "text": text, "symbols": symbols},
+                {
+                    "as_of": now,
+                    "text": text,
+                    "symbols": symbols,
+                    "news_cards_displayed": len(news_samples),
+                },
                 now=now,
                 event_time=now,
             )

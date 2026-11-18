@@ -663,10 +663,10 @@ class News:
     def alerts(self, symbols, *, now):
         return []
 
-    def briefing(self, symbols, *, now, limit=3):
+    def briefing(self, symbols, *, now, limit=3, samples=None):
         from trabe.news_digest import NewsDigest
 
-        return NewsDigest(self.store).briefing(symbols, now)
+        return NewsDigest(self.store).briefing(symbols, now, samples=samples)
 
     def legacy_briefing(self, symbols, *, now, limit=3):
         held = Ledger(self.store).held()

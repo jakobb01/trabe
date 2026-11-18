@@ -22,6 +22,7 @@ DEFAULTS = {
     "briefing_time": "08:00",
     "outlook_enabled": "off",
     "advisor_results_enabled": "off",
+    "advisor_shadow_enabled": "off",
     "paper_enabled": "off",
     "earnings_warning_days": "5",
     "insider_min_value_usd": "10000",
@@ -58,6 +59,7 @@ DESCRIPTIONS = {
     "briefing_time": "Briefing time in your timezone, HH:MM",
     "outlook_enabled": "Daily SPY/QQQ outlook 30m before US open and later assessment: on or off",
     "advisor_results_enabled": "Silent company outcome collection and assessment: on or off",
+    "advisor_shadow_enabled": "Quiet prospective company research sampling and scoring: on or off",
     "paper_enabled": "Daily simulated stock decisions and fills; use /paper start first: on or off",
     "earnings_warning_days": "Warn once within 1–14 calendar days before earnings",
     "insider_min_value_usd": "Minimum qualifying insider purchase value in USD, 1000–1000000000",
@@ -115,6 +117,7 @@ def validate_setting(key: str, value: str) -> str:
         "briefing_enabled",
         "outlook_enabled",
         "advisor_results_enabled",
+        "advisor_shadow_enabled",
         "paper_enabled",
     ):
         if value not in ("on", "off"):

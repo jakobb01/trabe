@@ -16,7 +16,7 @@ from weakref import WeakValueDictionary
 from trabe.preferences import DEFAULTS, validate_setting
 from trabe.storage import SCHEMA, MarketStorage
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 logger = logging.getLogger(__name__)
 _last_busy_trace = 0.0
 _connection_locks = WeakValueDictionary()
@@ -26,7 +26,8 @@ _connection_locks_guard = threading.Lock()
 class Store(MarketStorage):
     def __init__(self, path: Path):
         from trabe.advisor import ADVISOR_SCHEMA
-        from trabe.advisor_results import RESULTS_SCHEMA
+        from trabe.advisor_results import RESULTS_SCHEMA, SHADOW_RESULTS_SCHEMA
+        from trabe.advisor_shadow import SHADOW_SCHEMA
         from trabe.navigation import UI_SCHEMA
         from trabe.news_event_store import EVENT_SCHEMA, EventStore
         from trabe.news_store import NEWS_SCHEMA, migrate_legacy
@@ -103,6 +104,8 @@ class Store(MarketStorage):
                 *ADVISOR_SCHEMA,
                 *ENDPOINT_SCHEMA,
                 *RESULTS_SCHEMA,
+                *SHADOW_SCHEMA,
+                *SHADOW_RESULTS_SCHEMA,
                 *PAPER_SCHEMA,
                 *EVENT_SCHEMA,
                 *UI_SCHEMA,
@@ -183,8 +186,17 @@ class Store(MarketStorage):
 
     def apply_setting(self, db, key, value):
         value = validate_setting(key, value)
+        if key == "advisor_shadow_enabled" and value != self.settings(db).get(key):
+            if value == "on":
+                db.execute(
+                    "INSERT OR REPLACE INTO state VALUES ('advisor_shadow_enabled_at',?)",
+                    (str(time.time()),),
+                )
+            db.execute(
+                "DELETE FROM state WHERE key IN ('advisor_shadow_checked','advisor_shadow_error')"
+            )
         db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, value))
-        if key in {"paper_enabled", "advisor_results_enabled"}:
+        if key in {"paper_enabled", "advisor_results_enabled", "advisor_shadow_enabled"}:
             generation = key.removesuffix("_enabled") + "_generation"
             db.execute(
                 "INSERT INTO state VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",

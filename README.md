@@ -22,7 +22,7 @@ outbound; no website, webhook or exposed application port is needed.
 Outlooks, sentiment and company research use unvalidated rules. Missing or stale
 inputs remain explicit. News presentation uses local rules with no hosted model or
 new recurring API cost. News alerts default off.
-Current version: **0.9.3**, database schema **12**.
+Current version: **0.9.4**, database schema **13**.
 
 ## Get started
 

@@ -534,28 +534,47 @@ class OutlookService:
     def report(self, packet):
         zone = ZoneInfo(self.store.settings()["timezone"])
         stamp = datetime.fromtimestamp(packet["as_of"], zone).strftime("%d %b %H:%M %Z")
-        return f"🔭 Outlook (rules) • {packet['session_date']} • as of {stamp}\n{packet['forecast']['text']}"
+        forecast = packet["forecast"]
+        text = f"🔭 Outlook (rules) • {packet['session_date']} • as of {stamp}\n{forecast['text']}"
+        if forecast["session"] == "insufficient" and packet.get("gaps"):
+            text += "\nSaved evidence gaps: " + " • ".join(packet["gaps"][:6])
+        return text
 
     def briefing(self, now):
         try:
             session = target_session(self.calendar, now)
-            packet = self.repo.get(session_date=session.day)
-            if packet and packet["as_of"] <= now:
-                return self.report(packet)
-            local = datetime.fromtimestamp(
-                session.opens - 1800, ZoneInfo(self.store.settings()["timezone"])
-            ).strftime("%d %b %H:%M %Z")
-            return (
-                "Pre-open outlook: "
-                + (
-                    "scheduled " + local
-                    if self.store.settings()["outlook_enabled"] == "on"
-                    else "off; /outlook now requests one"
-                )
-                + "."
-            )
         except ValueError:
             return "Pre-open outlook: calendar unavailable/expired."
+        try:
+            packet = self.repo.get(session_date=session.day)
+        except ValueError:
+            return f"Pre-open outlook • {session.day}: saved record unavailable."
+        if packet and packet["as_of"] <= now:
+            return self.report(packet)
+        label = f"Pre-open outlook • {session.day}: "
+        if now >= session.opens:
+            return label + "no saved outlook for this session. Issuance closed at the open."
+        if self.store.state("storage_paused"):
+            return label + "saving paused by storage health."
+        settings = self.store.settings()
+        zone = ZoneInfo(settings["timezone"])
+        start = preopen(session)
+        manual = (
+            f"Premarket starts {datetime.fromtimestamp(start, zone):%d %b %H:%M %Z}."
+            if now < start
+            else "Request a manual refresh with /outlook now."
+        )
+        if settings["outlook_enabled"] != "on":
+            return label + "automatic outlook off. " + manual
+        if self.store.automation_paused(now):
+            return label + "automation paused. " + manual
+        scheduled = session.opens - 1800
+        if now > scheduled + 300:
+            return label + "automatic issuance window passed without a saved outlook. " + manual
+        if now >= scheduled:
+            return label + "awaiting automatic issuance within the five-minute window."
+        local = datetime.fromtimestamp(scheduled, zone).strftime("%d %b %H:%M %Z")
+        return label + "scheduled " + local + "."
 
     def schedule(self, insights, now=None):
         fixed_time = now is not None

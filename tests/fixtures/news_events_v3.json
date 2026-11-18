@@ -1,0 +1,513 @@
+{
+  "note": "Sanitized retained bounded source input; regression/development cases, not independent validation. news-058 has no explicit completed-settlement predicate in supplied input. Original sentence IDs below record the old splitter; new segmentation may preserve abbreviations as complete sentences.",
+  "cases": [
+    {
+      "id": "news-025",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "NVDA",
+      "item": {
+        "headline": "Why Micron Stock Dropped on Thursday",
+        "snippet": "Nvidia CEO Jensen Huang resigned following reports of alleged affairs, causing Nvidia stock to plunge 5.9% and triggering a broader selloff in related semiconductor stocks. Micron stock fell 4.8% due to concerns that Nvidia's leadership crisis could slow AI chip demand, which would reduce demand for Micron's memory chips used in data centers paired with Nvidia GPUs. However, the author notes this is a risk rather than a certainty, as other AI chip makers could fill the gap.",
+        "published_at": 1794498242.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Why Micron Stock Dropped on Thursday"
+        },
+        {
+          "id": "s0",
+          "text": "Nvidia CEO Jensen Huang resigned following reports of alleged affairs, causing Nvidia stock to plunge 5.9% and triggering a broader selloff in related semiconductor stocks."
+        },
+        {
+          "id": "s1",
+          "text": "Micron stock fell 4.8% due to concerns that Nvidia's leadership crisis could slow AI chip demand, which would reduce demand for Micron's memory chips used in data centers paired with Nvidia GPUs."
+        },
+        {
+          "id": "s2",
+          "text": "However, the author notes this is a risk rather than a certainty, as other AI chip makers could fill the gap."
+        }
+      ],
+      "expected": {
+        "type": "leadership",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "background",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-032",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "NVDA",
+      "item": {
+        "headline": "4 GARP Stocks That Investors Can Scoop Up for Maximum Returns",
+        "snippet": "The article presents a Growth at a Reasonable Price (GARP) investment strategy that combines value and growth metrics to identify undervalued stocks with solid growth prospects. Four stocks meeting the screening criteria are highlighted: Expedia Group with raised 2026 guidance, Ralph Lauren with improved fiscal 2027 outlook, NVIDIA with strong product momentum despite leadership transition, and Lam Research with robust guidance and AI-driven demand.",
+        "published_at": 1794581340.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "4 GARP Stocks That Investors Can Scoop Up for Maximum Returns"
+        },
+        {
+          "id": "s0",
+          "text": "The article presents a Growth at a Reasonable Price (GARP) investment strategy that combines value and growth metrics to identify undervalued stocks with solid growth prospects."
+        },
+        {
+          "id": "s1",
+          "text": "Four stocks meeting the screening criteria are highlighted: Expedia Group with raised 2026 guidance, Ralph Lauren with improved fiscal 2027 outlook, NVIDIA with strong product momentum despite leadership transition, and Lam Research with robust guidance and AI-driven demand."
+        }
+      ],
+      "expected": {
+        "type": "unknown",
+        "materiality": "low",
+        "relevance": "incidental",
+        "event_status": "unknown",
+        "news_role": "background",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-041",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "NVDA",
+      "item": {
+        "headline": "Stock Market News for Nov 13, 2026",
+        "snippet": "U.S. stock markets declined on Thursday with the Dow, Nasdaq, and S&P 500 each falling 0.4%. NVIDIA's CEO Jensen Huang resigned, rising Iran tensions, and expectations of a Fed rate hike pressured sentiment. Mixed Q3 earnings results were reported, with Merck missing estimates while Figure Technology and Wolverine World Wide beat expectations. Initial jobless claims increased to 200,000, and existing-home sales declined 5.5% in October.",
+        "published_at": 1794557700.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Stock Market News for Nov 13, 2026"
+        },
+        {
+          "id": "s0",
+          "text": "U.S."
+        },
+        {
+          "id": "s1",
+          "text": "stock markets declined on Thursday with the Dow, Nasdaq, and S&P 500 each falling 0.4%."
+        },
+        {
+          "id": "s2",
+          "text": "NVIDIA's CEO Jensen Huang resigned, rising Iran tensions, and expectations of a Fed rate hike pressured sentiment."
+        },
+        {
+          "id": "s3",
+          "text": "Mixed Q3 earnings results were reported, with Merck missing estimates while Figure Technology and Wolverine World Wide beat expectations."
+        },
+        {
+          "id": "s4",
+          "text": "Initial jobless claims increased to 200,000, and existing-home sales declined 5.5% in October."
+        }
+      ],
+      "expected": {
+        "type": "leadership",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "recap",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-058",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "AMZN",
+      "item": {
+        "headline": "Lawyers could pocket up to $100M of Amazon's $309.5M refund settlement — claims are due by Dec. 1",
+        "snippet": "AMZN shutterstock.com / flysnowfly An ongoing class-action lawsuit against Amazon [NASDAQ: AMZN] is set to restore a whopping $309.5 million into the hands of U.S. District Court for the Western District of Washington back in 2023, alleging that Amazon had failed to properly honor its own chargeback policies in some cases.",
+        "published_at": 1794668400.0,
+        "input_quality": "article"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Lawyers could pocket up to $100M of Amazon's $309.5M refund settlement — claims are due by Dec. 1"
+        },
+        {
+          "id": "s0",
+          "text": "AMZN shutterstock.com / flysnowfly An ongoing class-action lawsuit against Amazon [NASDAQ: AMZN] is set to restore a whopping $309.5 million into the hands of U.S."
+        },
+        {
+          "id": "s1",
+          "text": "District Court for the Western District of Washington back in 2023, alleging that Amazon had failed to properly honor its own chargeback policies in some cases."
+        }
+      ],
+      "expected": {
+        "type": "unknown",
+        "materiality": "low",
+        "relevance": "direct",
+        "event_status": "unknown",
+        "news_role": "background",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-079",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "VST",
+      "item": {
+        "headline": "Earnings Guidance Could Be A Game Changer For Vistra (VST)",
+        "snippet": "VST Vistra reported third quarter 2026 sales of US$6,347 million and net income of US$1,140 million, while recording US$269 million of long lived asset impairments, with full year 2026 and 2027 net income guidance supplied on a consolidated basis. The mix of higher reported profitability, sizeable non cash asset impairment, and multi year earnings guidance gives investors fresh detail on how Vistra's current operations and future commitments line up economically.",
+        "published_at": 1794719473.0,
+        "input_quality": "article"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Earnings Guidance Could Be A Game Changer For Vistra (VST)"
+        },
+        {
+          "id": "s0",
+          "text": "VST Vistra reported third quarter 2026 sales of US$6,347 million and net income of US$1,140 million, while recording US$269 million of long lived asset impairments, with full year 2026 and 2027 net income guidance supplied on a consolidated basis."
+        },
+        {
+          "id": "s1",
+          "text": "The mix of higher reported profitability, sizeable non cash asset impairment, and multi year earnings guidance gives investors fresh detail on how Vistra's current operations and future commitments line up economically."
+        }
+      ],
+      "expected": {
+        "type": "results",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "current",
+        "push_eligible": true
+      },
+      "legacy_analysis": {
+        "rules": "events-v2",
+        "context": "relationships-2026-11-14",
+        "ticker": "VST",
+        "issuer": "VST",
+        "actor": "VST",
+        "action": "unresolved",
+        "object": "Earnings Guidance Could Be A Game Changer For Vistra (VST)",
+        "type": "unknown",
+        "materiality": "low",
+        "direction": "unknown",
+        "direct": true,
+        "relationships": [],
+        "status": "uncertain/proposed",
+        "event_date": "2026-11-15",
+        "facts": [
+          {
+            "id": "h",
+            "text": "Earnings Guidance Could Be A Game Changer For Vistra (VST)"
+          },
+          {
+            "id": "s0",
+            "text": "VST Vistra reported third quarter 2026 sales of US$6,347 million and net income of US$1,140 million, while recording US$269 million of long lived asset impairments, with full year 2026 and 2027 net income guidance supplied on a consolidated basis."
+          }
+        ],
+        "attribution": "reporting",
+        "quality": "article",
+        "uncertainty": "Price impact unknown.",
+        "push_eligible": false,
+        "issuers": [
+          "VST"
+        ],
+        "seeded": false,
+        "correction": false
+      }
+    },
+    {
+      "id": "news-082",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "NVDA",
+      "item": {
+        "headline": "What’s Next for Nvidia After Jensen Huang’s Resignation?",
+        "snippet": "Nvidia founder and CEO Jensen Huang resigned following allegations of affairs, including one with a woman U.S. intelligence says is a Chinese spy. CFO Colette Kress was appointed interim CEO while the board searches for a permanent leader. Despite the turmoil, Nvidia's strong innovation pipeline and established market position in AI chips should help it continue operations, though strategic initiatives may be delayed during the transition period. The company faces potential regulatory scrutiny and export restrictions.",
+        "published_at": 1794733802.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "What’s Next for Nvidia After Jensen Huang’s Resignation?"
+        },
+        {
+          "id": "s0",
+          "text": "Nvidia founder and CEO Jensen Huang resigned following allegations of affairs, including one with a woman U.S."
+        },
+        {
+          "id": "s1",
+          "text": "intelligence says is a Chinese spy."
+        },
+        {
+          "id": "s2",
+          "text": "CFO Colette Kress was appointed interim CEO while the board searches for a permanent leader."
+        },
+        {
+          "id": "s3",
+          "text": "Despite the turmoil, Nvidia's strong innovation pipeline and established market position in AI chips should help it continue operations, though strategic initiatives may be delayed during the transition period."
+        },
+        {
+          "id": "s4",
+          "text": "The company faces potential regulatory scrutiny and export restrictions."
+        }
+      ],
+      "expected": {
+        "type": "leadership",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "background",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-084",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "AMZN",
+      "item": {
+        "headline": "Gatekeeper Now Available to Buy in AWS Marketplace, Giving Compliance-Driven Organisations a Faster Route to Vendor Governance",
+        "snippet": "Gatekeeper, a unified Vendor and Contract Lifecycle Management solution, is now available for purchase through AWS Marketplace. The platform consolidates vendor risk, contracts, compliance and spend management into a single system, with AI agents running exclusively on Amazon Bedrock to keep customer data in-region. This enables compliance-driven organizations to streamline vendor governance through their existing AWS accounts.",
+        "published_at": 1794600000.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Gatekeeper Now Available to Buy in AWS Marketplace, Giving Compliance-Driven Organisations a Faster Route to Vendor Governance"
+        },
+        {
+          "id": "s0",
+          "text": "Gatekeeper, a unified Vendor and Contract Lifecycle Management solution, is now available for purchase through AWS Marketplace."
+        },
+        {
+          "id": "s1",
+          "text": "The platform consolidates vendor risk, contracts, compliance and spend management into a single system, with AI agents running exclusively on Amazon Bedrock to keep customer data in-region."
+        },
+        {
+          "id": "s2",
+          "text": "This enables compliance-driven organizations to streamline vendor governance through their existing AWS accounts."
+        }
+      ],
+      "expected": {
+        "type": "competition",
+        "materiality": "medium",
+        "relevance": "indirect",
+        "event_status": "reported",
+        "news_role": "current",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-094",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "AMD",
+      "item": {
+        "headline": "Anthropic Just Delivered Great News for AMD Investors and Bad News for Nvidia",
+        "snippet": "Anthropic's Claude Mythos model can now optimize AI models to run on AMD's MI355 GPUs in just three days, compared to the previous 6-12 months required. This development significantly weakens Nvidia's CUDA software moat, which has been a key competitive advantage. AMD's cheaper Helios system ($20B per gigawatt vs Nvidia's $40B) could now gain market share as the software barrier to using alternative chips diminishes.",
+        "published_at": 1794738002.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Anthropic Just Delivered Great News for AMD Investors and Bad News for Nvidia"
+        },
+        {
+          "id": "s0",
+          "text": "Anthropic's Claude Mythos model can now optimize AI models to run on AMD's MI355 GPUs in just three days, compared to the previous 6-12 months required."
+        },
+        {
+          "id": "s1",
+          "text": "This development significantly weakens Nvidia's CUDA software moat, which has been a key competitive advantage."
+        },
+        {
+          "id": "s2",
+          "text": "AMD's cheaper Helios system ($20B per gigawatt vs Nvidia's $40B) could now gain market share as the software barrier to using alternative chips diminishes."
+        }
+      ],
+      "expected": {
+        "type": "competition",
+        "materiality": "medium",
+        "relevance": "indirect",
+        "event_status": "reported",
+        "news_role": "current",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-107",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "AMZN",
+      "item": {
+        "headline": "Qualcomm Is Cheap Enough to Hold Through 2030",
+        "snippet": "Qualcomm stock has fallen 33% from its May high and now trades at just 9.6x management's fiscal 2029 earnings target, making it attractive for long-term investors. While handset chip sales have declined 26% year-over-year, the company is building a new growth engine through its data center business, which is forecast to reach a $7 billion annual run rate by end of fiscal 2027. With Amazon as a key customer and a $60 billion purchase option contract, Qualcomm's diversification into data center, automotive, and IoT segments is expected to grow over 60% in fiscal 2027, offsetting losses from Apple's shift to proprietary modems.",
+        "published_at": 1794655202.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Qualcomm Is Cheap Enough to Hold Through 2030"
+        },
+        {
+          "id": "s0",
+          "text": "Qualcomm stock has fallen 33% from its May high and now trades at just 9.6x management's fiscal 2029 earnings target, making it attractive for long-term investors."
+        },
+        {
+          "id": "s1",
+          "text": "While handset chip sales have declined 26% year-over-year, the company is building a new growth engine through its data center business, which is forecast to reach a $7 billion annual run rate by end of fiscal 2027."
+        },
+        {
+          "id": "s2",
+          "text": "With Amazon as a key customer and a $60 billion purchase option contract, Qualcomm's diversification into data center, automotive, and IoT segments is expected to grow over 60% in fiscal 2027, offsetting losses from Apple's shift to proprietary modems."
+        }
+      ],
+      "expected": {
+        "type": "unknown",
+        "materiality": "low",
+        "relevance": "incidental",
+        "event_status": "unknown",
+        "news_role": "background",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-124",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "GOOGL",
+      "item": {
+        "headline": "Google Maps makes major change after 20-year standoff",
+        "snippet": "Google is complying with conditions attached to South Korea's approval of high-precision map data exports.",
+        "published_at": 1794589607.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Google Maps makes major change after 20-year standoff"
+        },
+        {
+          "id": "s0",
+          "text": "Google is complying with conditions attached to South Korea's approval of high-precision map data exports."
+        }
+      ],
+      "expected": {
+        "type": "regulatory",
+        "materiality": "medium",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "current",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-128",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "NVDA",
+      "item": {
+        "headline": "Advisor Insights — Brought to You By The Motley Fool",
+        "snippet": "Markets faced a turbulent week with strong jobs data and hot inflation pushing the 10-year Treasury yield above 5%, increasing odds of a December rate hike. Nvidia CEO Jensen Huang resigned amid personal conduct allegations, causing the stock to plunge 14% intraday before recovering to close down 4%. The article advises advisors to audit client floating-rate debt, match bond duration to timelines, and separate leadership changes from business fundamentals.",
+        "published_at": 1794612161.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Advisor Insights — Brought to You By The Motley Fool"
+        },
+        {
+          "id": "s0",
+          "text": "Markets faced a turbulent week with strong jobs data and hot inflation pushing the 10-year Treasury yield above 5%, increasing odds of a December rate hike."
+        },
+        {
+          "id": "s1",
+          "text": "Nvidia CEO Jensen Huang resigned amid personal conduct allegations, causing the stock to plunge 14% intraday before recovering to close down 4%."
+        },
+        {
+          "id": "s2",
+          "text": "The article advises advisors to audit client floating-rate debt, match bond duration to timelines, and separate leadership changes from business fundamentals."
+        }
+      ],
+      "expected": {
+        "type": "leadership",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "recap",
+        "push_eligible": false
+      }
+    },
+    {
+      "id": "news-139",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "VST",
+      "item": {
+        "headline": "Vistra (VST) Posts $269 Million Long Lived Asset Impairment In Third Quarter",
+        "snippet": "VST Vistra (NYSE:VST) disclosed a material impairment of long-lived assets for the quarter ended September 30, 2026. Management linked the impairment to updated assessments of future cash flows and recoverable value for part of Vistra's portfolio.",
+        "published_at": 1794716367.0,
+        "input_quality": "article"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Vistra (VST) Posts $269 Million Long Lived Asset Impairment In Third Quarter"
+        },
+        {
+          "id": "s0",
+          "text": "VST Vistra (NYSE:VST) disclosed a material impairment of long-lived assets for the quarter ended September 30, 2026."
+        },
+        {
+          "id": "s1",
+          "text": "Management linked the impairment to updated assessments of future cash flows and recoverable value for part of Vistra's portfolio."
+        }
+      ],
+      "expected": {
+        "type": "results",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "current",
+        "push_eligible": true
+      }
+    },
+    {
+      "id": "news-158",
+      "kind": "retained development excerpt; previously reviewed",
+      "ticker": "GOOGL",
+      "item": {
+        "headline": "Sundar Pichai Reported Alphabet's Cloud Revenue Grew 103% Last Quarter While the Gemini App Reached 1 Billion Monthly Users. Is Google Cloud Becoming a Bigger Growth Driver Than Search?",
+        "snippet": "Alphabet reported Google Cloud revenue grew 103% year-over-year to $30.7 billion in Q3, while the Gemini App reached 1 billion monthly users. However, Google Search growth slowed to 12% from 17% in Q2, raising concerns about AI's impact on search monetization. Cloud is emerging as Alphabet's primary growth engine with a $561 billion customer backlog, but the stock fell 28% from its peak amid worries about search's long-term viability and massive capital spending pressures.",
+        "published_at": 1794652380.0,
+        "input_quality": "snippet"
+      },
+      "source_sentences": [
+        {
+          "id": "h",
+          "text": "Sundar Pichai Reported Alphabet's Cloud Revenue Grew 103% Last Quarter While the Gemini App Reached 1 Billion Monthly Users. Is Google Cloud Becoming a Bigger Growth Driver Than Search?"
+        },
+        {
+          "id": "s0",
+          "text": "Alphabet reported Google Cloud revenue grew 103% year-over-year to $30.7 billion in Q3, while the Gemini App reached 1 billion monthly users."
+        },
+        {
+          "id": "s1",
+          "text": "However, Google Search growth slowed to 12% from 17% in Q2, raising concerns about AI's impact on search monetization."
+        },
+        {
+          "id": "s2",
+          "text": "Cloud is emerging as Alphabet's primary growth engine with a $561 billion customer backlog, but the stock fell 28% from its peak amid worries about search's long-term viability and massive capital spending pressures."
+        }
+      ],
+      "expected": {
+        "type": "results",
+        "materiality": "high",
+        "relevance": "direct",
+        "event_status": "reported",
+        "news_role": "background",
+        "push_eligible": false
+      }
+    }
+  ]
+}

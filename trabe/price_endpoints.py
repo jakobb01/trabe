@@ -271,10 +271,22 @@ class EndpointStore:
             raise
 
     def prune(self, now, db):
-        db.execute(
-            "DELETE FROM market_price_endpoints WHERE NOT EXISTS(SELECT 1 FROM advisor_outcome_inputs a WHERE a.endpoint_id=market_price_endpoints.id OR (a.state='pending' AND a.symbol=market_price_endpoints.symbol AND a.session_date=market_price_endpoints.session_date AND a.edge=market_price_endpoints.edge)) AND NOT EXISTS(SELECT 1 FROM paper_price_inputs p WHERE p.endpoint_id=market_price_endpoints.id OR (p.endpoint_id IS NULL AND p.symbol=market_price_endpoints.symbol AND p.session_date=market_price_endpoints.session_date AND p.edge=market_price_endpoints.edge)) AND (COALESCE(json_array_length(json_extract(payload,'$.actions')),0)=0 OR NOT EXISTS(SELECT 1 FROM paper_run_state WHERE status!='closed') OR EXISTS(SELECT 1 FROM paper_action_conflicts c JOIN paper_run_state s ON s.run_id=c.run_id WHERE c.ticker=market_price_endpoints.symbol AND s.status!='closed'))"
+        advisor_inputs = ("advisor_outcome_inputs", "shadow_advisor_outcome_inputs")
+        referenced = " AND ".join(
+            f"""NOT EXISTS(SELECT 1 FROM {table} a WHERE a.endpoint_id=market_price_endpoints.id
+                OR (a.state='pending' AND a.symbol=market_price_endpoints.symbol
+                AND a.session_date=market_price_endpoints.session_date AND a.edge=market_price_endpoints.edge))"""
+            for table in advisor_inputs
         )
         db.execute(
-            "DELETE FROM market_endpoint_attempts WHERE next_attempt_at<=? AND NOT EXISTS(SELECT 1 FROM advisor_outcome_inputs a WHERE a.symbol=market_endpoint_attempts.symbol AND a.session_date=market_endpoint_attempts.session_date AND a.state='pending') AND NOT EXISTS(SELECT 1 FROM paper_price_inputs p WHERE p.symbol=market_endpoint_attempts.symbol AND p.session_date=market_endpoint_attempts.session_date AND p.endpoint_id IS NULL AND p.expires_at>?)",
+            f"DELETE FROM market_price_endpoints WHERE {referenced} AND NOT EXISTS(SELECT 1 FROM paper_price_inputs p WHERE p.endpoint_id=market_price_endpoints.id OR (p.endpoint_id IS NULL AND p.symbol=market_price_endpoints.symbol AND p.session_date=market_price_endpoints.session_date AND p.edge=market_price_endpoints.edge)) AND (COALESCE(json_array_length(json_extract(payload,'$.actions')),0)=0 OR NOT EXISTS(SELECT 1 FROM paper_run_state WHERE status!='closed') OR EXISTS(SELECT 1 FROM paper_action_conflicts c JOIN paper_run_state s ON s.run_id=c.run_id WHERE c.ticker=market_price_endpoints.symbol AND s.status!='closed'))"
+        )
+        pending = " AND ".join(
+            f"""NOT EXISTS(SELECT 1 FROM {table} a WHERE a.symbol=market_endpoint_attempts.symbol
+                AND a.session_date=market_endpoint_attempts.session_date AND a.state='pending')"""
+            for table in advisor_inputs
+        )
+        db.execute(
+            f"DELETE FROM market_endpoint_attempts WHERE next_attempt_at<=? AND {pending} AND NOT EXISTS(SELECT 1 FROM paper_price_inputs p WHERE p.symbol=market_endpoint_attempts.symbol AND p.session_date=market_endpoint_attempts.session_date AND p.endpoint_id IS NULL AND p.expires_at>?)",
             (now, now),
         )

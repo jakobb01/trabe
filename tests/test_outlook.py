@@ -180,7 +180,9 @@ class OutlookTests(unittest.TestCase):
             packet = self.service.issue(now=now)
             self.assertEqual(packet["forecast"]["opening"], "insufficient")
             self.assertEqual(packet["forecast"]["session"], "insufficient")
-            self.assertTrue(packet["gaps"])
+            text = self.service.report(packet)
+            self.assertIn("SPY current premarket/baseline unavailable or stale", text)
+            self.assertNotIn("QQQ current premarket/baseline unavailable or stale", text)
 
     def test_missing_context_abstains_for_session_without_hiding_valid_opening(self):
         self.signals.delete("market-context", "^VIX")
@@ -188,8 +190,28 @@ class OutlookTests(unittest.TestCase):
         packet = self.service.issue(now=self.now)
         self.assertEqual(packet["forecast"]["opening"], "bullish")
         self.assertEqual(packet["forecast"]["session"], "insufficient")
-        self.assertIn("session evidence insufficient", packet["forecast"]["text"])
-        self.assertIn("Fresh broad-market news unavailable", packet["gaps"])
+        text = self.service.report(packet)
+        self.assertIn("Bullish opening expectation; session evidence insufficient", text)
+        self.assertIn("Fresh broad-market news unavailable", text)
+        self.assertIn("VIX context unavailable/stale", text)
+
+    def test_briefing_distinguishes_waiting_paused_missed_and_closed_outlook(self):
+        self.assertIn("scheduled", self.service.briefing(self.now - 60))
+        self.assertIn("awaiting automatic issuance", self.service.briefing(self.now))
+        self.store.pause_automation(self.now + 300)
+        self.assertIn("automation paused", self.service.briefing(self.now))
+        self.store.set_state("storage_paused", "full")
+        self.assertIn("saving paused by storage health", self.service.briefing(self.now))
+        self.store.set_state("storage_paused", "")
+        self.service.schedule(self.insights, self.now + 301)
+        missed = self.service.briefing(self.now + 301)
+        self.assertIn("window passed without a saved outlook", missed)
+        self.assertIn("/outlook now", missed)
+        closed = self.service.briefing(self.session.opens)
+        self.assertIn("Issuance closed at the open", closed)
+        self.assertNotIn("/outlook now", closed)
+        self.assertIsNone(self.service.repo.get())
+        self.assertEqual(self.box.pending(), 0)
 
     def test_future_receipts_publications_and_company_evidence_are_excluded(self):
         value = self.signals.get("market-context", "SPY")["payload"]

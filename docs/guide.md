@@ -96,13 +96,60 @@ session-based claims prevent duplicate delivery across travel/restarts.
 
 ### Company developments and news alerts
 
-`/news cached [TICKER]` shows local event cards with named sources: materiality,
-positive/negative/mixed/neutral/unknown price direction, short supported source
-sentences, attribution and uncertainty. Explicit CEO transitions, actual results
-and binding regulatory actions outrank routine previews. A major event can have
+`/news cached [TICKER]` shows local event cards with named sources, materiality,
+price uncertainty and whole excerpts. The card leads with the company-specific
+claim when the retained source supplies one. Compact cards can include a second
+excerpt when it supplies a material qualifier. Event rules inspect bounded source clauses,
+so a speculative headline does not erase a supported body disclosure. Explicit CEO
+transitions, reported financial results/asset impairments and binding regulatory
+actions or settlements outrank routine previews. Approvals/compliance are medium
+materiality by default. A major event can have
 unknown price impact. Unresolved actors and speculative claims stay uncertain;
 company statements are attributed, not independently verified. Relationships are
 small, curated and dated; coverage is not a general understanding of company news.
+Cards distinguish company developments, related reporting and commentary.
+Cards use one company heading and credit the source of the displayed excerpts.
+Cached views can select clearer excerpts from older retained evidence at read
+time. Frozen event revisions and alert eligibility keep their original meaning.
+Newly enqueued alerts use the same compact excerpt selector.
+The morning briefing can fill one remaining company slot when a source sentence
+names the issuer, reports results and says the company raised or cut forward
+guidance. The card explains why it appears. Alert eligibility still follows the
+saved event classification.
+
+#### Review samples from scheduled briefings
+
+When the scheduled morning briefing queues, it records up to three company news
+cards actually included in the message. Each sample keeps the credited source
+packet, the previous compact selector's first frozen excerpt, the new excerpts
+and exact card text, with timestamps, ticker, and selector versions. The pair
+compares excerpts for the same event. The stored briefing records the queued
+message. Only company news cards shown in scheduled briefings are sampled.
+Sampling makes no extra requests or messages.
+
+Review a local database copy. Samples expire after 14 days or when the newest
+30 fill the limit, with up to 16 KiB of JSON per card. Normal news maintenance
+prunes expired rows. This query includes queued briefings with zero displayed
+cards. A null displayed count means the run did not record that count. A lower
+sample count can reflect unavailable evidence, a size limit, or retention.
+
+```sql
+SELECT n.event_key, datetime(n.created_at, 'unixepoch') AS queued_utc,
+       json_extract(b.payload, '$.news_cards_displayed') AS displayed,
+       COUNT(s.position) AS retained_samples
+FROM signal_notifications AS n
+LEFT JOIN signals AS b ON b.kind = n.kind AND b.event_key = n.event_key
+LEFT JOIN news_summary_samples AS s ON s.briefing_key = n.event_key
+WHERE n.kind = 'briefing'
+  AND n.created_at >= CAST(strftime('%s', 'now', '-14 days') AS INTEGER)
+GROUP BY n.event_key, n.created_at, displayed
+ORDER BY n.created_at DESC;
+
+SELECT briefing_key, position, ticker, datetime(as_of, 'unixepoch') AS as_of_utc,
+       payload
+FROM news_summary_samples
+ORDER BY as_of DESC, position;
+```
 
 News cards show age in hours (for example, “5h ago”), without an absolute date or clock time. Active cards cover 72 hours. Still relevant major events from the last seven days
 appear separately with their age in hours. `/news sources` shows specific per-source
@@ -145,9 +192,13 @@ There is no urgent bypass. Quiet candidates coalesce; stale ones expire rather
 than building an unlimited queue. Caps count enqueued messages conservatively
 per local day and rolling 24 hours, including messages later dropped.
 
-Only fresh, directly supported high-materiality events or substantive corrections
+Only fresh, directly supported, reported current high-materiality events with
+displayable supporting facts, or substantive corrections
 to previously notified events qualify. Uncertain clustering, competition claims,
-previews, opinion and source outages remain digest-only. Enable/resume records a
+indirect/incidental context, recaps, previews, opinion and source outages remain
+digest-only. Initial alerts require the event's direct issuer to be held/watched;
+another issuer's incidental audience cannot authorize a push. Saved alert preferences
+are preserved on upgrade. Enable/resume records a
 new observation watermark and generation; old stories are seeded silently. There
 is at most one initial enqueue and one substantive follow-up per event. Disable,
 pause, storage pressure, generation changes, removed companies, quiet time and
@@ -194,8 +245,12 @@ unscorable after seven days.
 
 `/advisor TICKER` saves research for a held/watched company from cached evidence.
 It does not request data. Refresh company reports before first issuance when
-needed. `/advisor cached TICKER` reads the last record; `/advisor evidence TICKER`
-includes sources, the reference price, input hash and assessment contract.
+needed. Companies → Research and `/advisor cached TICKER` show the last saved
+forecast and label its window as upcoming, underway or complete. When no record
+exists, they show a read-only preview from the current cache. Use
+`/advisor preview TICKER` to inspect current evidence and gaps before saving.
+`/advisor evidence TICKER` includes saved sources, the reference price, input
+hash and assessment contract.
 
 The horizon is the next five **complete** US sessions, starting at an open strictly
 after issuance and ending at the fifth close. One immutable suggestion is allowed
@@ -241,6 +296,40 @@ are unscorable. Returns are **unadjusted indicative price returns; corporate-act
 coverage is unverified**. Fees, dividends and simulated fills are outside this
 contract. Overlapping windows are not independent samples; hit rate is not profit.
 Collection respects global pause/storage guards and sends no new daily messages.
+
+`/advisor compare [TICKER]` compares the original rules with two alternatives on
+new records. Non-neutral consensus ignores neutral votes and needs all directional
+votes to agree. Mean story bias averages all eligible story biases and calls
+bullish at +0.10 or above and bearish at −0.10 or below. Both calls use the
+original evidence gates and stay mixed if a story group has a conflict. They are
+saved with the original packet at issuance. Older packets remain readable, and
+previews use only the original research rules.
+
+The comparison shows frozen and scored directional coverage, input gaps, method
+disagreements, pending/abstained/unscorable records, and matches on identical
+eligible records. On scored disagreements it counts candidate wins, baseline
+wins, and cases both missed. It reports owner-issued and automatic cohorts separately.
+The disjoint summary selects earliest-ending scored windows first, without
+shared target sessions, and keeps all scored companies in each selected window.
+Companies within a window share market exposure. These are prospective observations.
+
+`/advisor shadow on|off` controls quiet automatic collection (off by default).
+`/advisor shadow` shows the next sampling window and recorded checkpoints. On each
+verified trading day, the worker samples up to five held or watched companies on
+a rotating alphabetical schedule between 09:20 and 09:29 New York time. The five
+target sessions start that day. It uses the existing point-in-time cache and
+records the selected companies, evidence gaps or omissions, and frozen calls.
+Checkpoints are written once per session. A missed window stays a gap in the
+record. Earlier preferences about alerts, manual assessment and paper trading
+apply independently.
+
+The automatic cohort uses the same price endpoints and schedule, sharing the
+existing request limit. An abstention needs no endpoint requests. Shadow
+capture and scoring respect the global pause, storage guard and shadow setting.
+They send no Telegram messages. Checkpoints and up to 384 automatic records are
+retained for three calendar months. The first scores need five complete
+sessions plus endpoint collection. Even a full week of captures has overlapping
+windows.
 
 ### Daily paper experiment
 
@@ -489,12 +578,66 @@ lost Telegram HTTP response can still cause duplicate delivery.
 
 ## Roadmap
 
-1. Evaluate prospective company forecast usefulness and paper performance
-   independently before expanding model complexity or research claims.
-2. Improve verified corporate-action coverage and comparable earnings evidence.
-3. Define archival/retention for continuing a capped paper experiment; define any
-   portfolio benchmark or drawdown methodology separately from company SPY scores.
+The direction is **better evidence and small local classifiers, with zero recurring
+API cost**. Keep Python and the existing Pi. News classification answers “what
+happened, to which company, and how important is it?” Forecasting answers “what
+happens to the price afterward?” Better classification alone does not establish
+better forecasts. Current outlook/advisor/paper rules have no established
+predictive advantage.
 
-Richer publisher coverage, weekly comparisons, alert recovery rules and portfolio
-risk views remain possible follow-ups. Automated brokerage execution is outside
-the current scope.
+The tested Needle classifier is not an integration candidate: it supplied no
+accepted labels in the 200-news trial and was too slow in the tested Pi setup.
+That result concerns this model/configuration, not every possible local model.
+News digests, event rules, navigation and outcome collection already exist;
+the following records implementation status and next priorities.
+
+1. **Evaluate the revised classification rules on later news.** Rules now consider
+   supported body sentences, missing financial/legal predicates, direct versus
+   indirect context and scoped uncertainty. On the reused 200-article development
+   sample, high-materiality detection rose from 4/13 to 8/13, but relevance agreement
+   fell from 184/200 to 174/200. This is a tradeoff, not a general accuracy claim.
+   Check a later untouched sample with related-event articles kept together;
+   judge important-event recall, attribution, abstention and false alerts separately.
+2. **Collect usable learning and outcome data in parallel.** Preserve source text,
+   reviewed event labels, exact decision-time inputs and subsequent price outcomes.
+   Improve comparable earnings and corporate-action evidence where it affects
+   outcome validity. Define a bounded offline archive before existing retention
+   caps discard useful training history; do not silently enlarge Pi storage.
+   The current news references are assistant-reviewed, not expert ground truth;
+   review ambiguous and important cases before using them for training.
+3. **Revisit learned news classification after improving data.** A first offline
+   scikit-learn TF-IDF/logistic-regression trial did not justify integration:
+   grouped out-of-fold relevance was 127/200 versus the rules' 184/200; high-event
+   detection was 2/13 versus 4/13. These are development-corpus results with sparse
+   assistant-reviewed labels and uneven event groups, not independent validation.
+   Gather more reviewed event families and explicit issuer context before another
+   candidate. Train offline; export bounded vocabulary/weights only after a useful
+   measured improvement and inference-parity/Pi-footprint checks. Keep the runtime
+   training stack off the Pi and preserve rules/abstention as the fallback.
+   Additional fixed trials of a small pretrained NLI encoder and a structured
+   decision tree also failed the useful recall/false-positive tradeoff. The next
+   proposed learning task is event/participant/status extraction, using reviewed
+   current examples and an expert-labelled resource such as
+   [SENTiVENT](https://huggingface.co/datasets/GillesJacobs/sentivent), with explicit
+   materiality/alert policy afterward. This path is not yet trained or validated.
+   See scikit-learn's [text feature documentation](https://scikit-learn.org/stable/modules/feature_extraction.html).
+4. **Evaluate prediction changes separately, after outcomes accumulate.** First
+   report current forecast coverage, errors and company returns relative to SPY.
+   Then compare a small statistical candidate with frozen existing rules and simple
+   baselines using only facts available at issue time. Train on earlier sessions,
+   evaluate on later sessions, and exclude overlapping five-session outcome
+   windows across the boundary. Freeze any new price-history features before use;
+   old snapshots cannot supply history they never captured. Report uncertainty;
+   a few sessions or many correlated articles cannot establish predictive skill.
+5. **Promote only a demonstrated improvement.** Run a promising forecast candidate
+   alongside the existing baseline as a separate prospective experiment. Preserve
+   historical records and paper-rules-v1. Evaluate paper returns after fees/FX,
+   turnover and drawdown against a separately specified portfolio benchmark.
+   If the candidate fails to improve the relevant held-out/prospective results,
+   retain the baseline and report that finding.
+
+The immediate deliverable is the focused rule improvement in step 1, with a
+before/after classification comparison. Forecast outcome collection continues
+alongside it. Paid models, a Rust rewrite, new hardware and automated brokerage
+execution are outside this plan. Further model experiments are conditional on
+data and measured need, not an open-ended search for a model name.

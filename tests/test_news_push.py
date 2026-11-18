@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from trabe.news_event_store import EventStore
+from trabe.news_events import analyze
 from trabe.news_push import NewsPush, quiet
 from trabe.outbox import Outbox
 from trabe.store import Store
@@ -54,6 +55,29 @@ class PushTests(unittest.TestCase):
         self.assertEqual(self.push.run_once(["NVDA"], self.now + 3), 0)
         self.assertEqual(self.store.settings()["news_quiet_start"], "22:00")
 
+    def test_outbound_alert_uses_retained_source_detail_for_the_same_delivery(self):
+        body = (
+            "NVIDIA (NASDAQ: NVDA) Board of Directors announced that its CEO "
+            "has resigned, effective immediately."
+        )
+        self.ingest(snippet=body, input_quality="snippet")
+        event = self.repo.events(["NVDA"], self.now)[0]
+        self.assertNotIn(body, [fact["text"] for fact in event["facts"]])
+        self.assertTrue(event["push_eligible"])
+        self.assertEqual(self.push.run_once(["NVDA"], self.now + 1), 1)
+        telegram = Mock()
+        telegram.send.return_value = {"message_id": 1}
+        outbox = Outbox(self.store)
+        outbox.flush(telegram, now=self.now + 2)
+        self.assertEqual(outbox.pending(), 0)
+        telegram.send.assert_called_once()
+        chat_id, sent = telegram.send.call_args.args
+        self.assertEqual(chat_id, 123)
+        self.assertIn(body, sent)
+        self.assertIn("Source: Fixture (feed extract)", sent)
+        self.assertEqual(sent.count("Price impact unknown."), 1)
+        self.assertEqual(self.push.run_once(["NVDA"], self.now + 3), 0)
+
     def test_cross_provider_restart_one_initial_and_only_one_changed_followup(self):
         item = self.ingest()
         self.assertEqual(self.push.run_once(["NVDA"], self.now + 1), 1)
@@ -78,6 +102,70 @@ class PushTests(unittest.TestCase):
         )
         self.assertEqual(restarted.run_once(["NVDA"], self.now + 7), 0)
         self.assertEqual(Outbox(self.store).pending(), 2)
+
+    def test_v2_notified_source_and_v3_copy_never_replay_after_restart(self):
+        current = analyze
+
+        def legacy(item, ticker):
+            result = current(item, ticker)
+            result["rules"] = "events-v2"
+            for key in ("relevance", "event_status", "news_role"):
+                result.pop(key)
+            return result
+
+        with patch("trabe.news_event_store.analyze", side_effect=legacy):
+            item = self.ingest()
+        event = self.repo.events(["NVDA"], self.now)[0]
+        self.assertEqual(self.push.run_once(["NVDA"], self.now + 1), 1)
+        self.repo.ingest([item], "NVDA", self.now + 2)
+        self.repo.ingest(
+            [
+                item
+                | {
+                    "provider": "copy",
+                    "publisher": "Other",
+                    "item_id": "copy",
+                    "url": "https://copy.example/v3",
+                }
+            ],
+            "NVDA",
+            self.now + 3,
+        )
+        reopened = Store(self.store.path)
+        self.assertEqual(
+            EventStore(reopened).events(["NVDA"], self.now + 4)[0]["revision"], event["revision"]
+        )
+        self.assertEqual(NewsPush(reopened, 123).run_once(["NVDA"], self.now + 4), 0)
+        self.repo.ingest(
+            [
+                item
+                | {
+                    "headline": "Correction: NVIDIA cuts full-year guidance",
+                    "correction_of": "NVDA",
+                }
+            ],
+            "NVDA",
+            self.now + 5,
+        )
+        self.assertEqual(self.push.run_once(["NVDA"], self.now + 6), 1)
+        self.assertEqual(self.store.settings()["news_alerts_enabled"], "on")
+
+    def test_indirect_audience_cannot_receive_another_issuers_initial_event_or_queued_push(self):
+        self.store.remove("NVDA")
+        self.ingest(
+            "AMZN",
+            headline="Gatekeeper is available through AWS Marketplace; NVIDIA reported quarterly results.",
+        )
+        event = self.repo.events(["AMZN"], self.now)[0]
+        self.assertEqual(event["ticker"], "NVDA")
+        self.assertTrue(event["push_eligible"])
+        self.assertEqual(self.push.run_once(["AMZN"], self.now + 1), 0)
+        self.store.add("NVDA", 2)
+        self.assertEqual(self.push.run_once(["AMZN", "NVDA"], self.now + 2), 1)
+        self.store.remove("NVDA")
+        with self.store.connection() as db:
+            item_id = db.execute("SELECT id FROM outbox WHERE kind='news_event'").fetchone()[0]
+            self.assertEqual(NewsPush.flush_policy(self.store, db, item_id, self.now + 3), "drop")
 
     def test_explicit_withdrawal_routes_to_prior_issuer_without_inventing_an_actor(self):
         item = self.ingest()

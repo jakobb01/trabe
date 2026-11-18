@@ -5,10 +5,11 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from trabe.news_digest import NewsDigest, card, units
 from trabe.news_event_store import EventStore
-from trabe.news_events import analyze
+from trabe.news_events import analyze, safe_projection, sentences
 from trabe.store import SCHEMA_VERSION, Store
 
 
@@ -117,6 +118,244 @@ class EventTests(unittest.TestCase):
         self.assertEqual(
             analyze(self.item("They are leaving next week"), "NVDA")["direction"], "unknown"
         )
+
+    def test_v3_retained_development_excerpts_preserve_source_support(self):
+        corpus = json.loads((Path(__file__).parent / "fixtures/news_events_v3.json").read_text())
+        for case in corpus["cases"]:
+            with self.subTest(case=case["id"]):
+                result = analyze(case["item"], case["ticker"])
+                for key, expected in case["expected"].items():
+                    self.assertEqual(result[key], expected, key)
+                source = sentences(case["item"])
+                for fact in result["facts"]:
+                    self.assertIn(fact, source)
+                    self.assertLessEqual(len(fact["text"]), 280)
+                self.assertEqual(result, safe_projection(result))
+                if case["id"] in {"news-079", "news-158"}:
+                    self.assertEqual(result["facts"][0]["id"], "s0")
+                if case["id"] == "news-079":
+                    self.assertIn("US$6,347 million", result["facts"][0]["text"])
+
+    def test_synthetic_predicate_status_and_clause_attribution(self):
+        cases = [
+            (
+                "Amazon reached a $309.5 million settlement; lawyers may receive fees.",
+                "regulatory",
+                "high",
+                "reported",
+                True,
+            ),
+            ("Amazon did not reach a settlement.", "regulatory", "low", "denied", False),
+            ("Amazon may reach a settlement.", "regulatory", "low", "proposed", False),
+            (
+                "Amazon reached a settlement. Amazon denies it reached a settlement.",
+                "regulatory",
+                "low",
+                "unknown",
+                False,
+            ),
+            (
+                "Amazon reported quarterly results; Acme did not report earnings.",
+                "results",
+                "high",
+                "reported",
+                True,
+            ),
+            (
+                "Amazon reported quarterly results; Amazon denies a CEO departure.",
+                "results",
+                "high",
+                "reported",
+                True,
+            ),
+            ("Amazon raised guidance. Amazon cut guidance.", "results", "low", "unknown", False),
+            (
+                "Acme reported quarterly results; Amazon did not report earnings.",
+                "results",
+                "low",
+                "denied",
+                False,
+            ),
+            (
+                "Amazon will report quarterly results next week.",
+                "results",
+                "low",
+                "proposed",
+                False,
+            ),
+            ("Analysts report Amazon earnings estimates.", "unknown", "low", "unknown", False),
+            ("Amazon reports expected quarterly revenue.", "results", "low", "proposed", False),
+            (
+                "Amazon's supplier Acme reports quarterly results.",
+                "unknown",
+                "low",
+                "unknown",
+                False,
+            ),
+            ("Amazon says Expedia raised guidance.", "unknown", "low", "unknown", False),
+            ("Amazon CEO announced quarterly earnings.", "unknown", "low", "unknown", False),
+            ("Amazon CEO announced a retirement.", "leadership", "high", "reported", True),
+            ("Court orders Amazon to refund customers.", "regulatory", "high", "reported", True),
+            (
+                "Amazon says the court orders Acme to refund customers.",
+                "unknown",
+                "low",
+                "unknown",
+                False,
+            ),
+            ("The court fined Acme for misusing Amazon chips.", "unknown", "low", "unknown", False),
+            (
+                "Amazon received regulatory approval for its platform.",
+                "regulatory",
+                "medium",
+                "reported",
+                False,
+            ),
+            (
+                "Amazon announced a platform launch planned for next year.",
+                "competition",
+                "medium",
+                "reported",
+                False,
+            ),
+            ("Amazon plans to launch a platform next year.", "unknown", "low", "unknown", False),
+        ]
+        for text, kind, tier, status, push in cases:
+            with self.subTest(text=text):
+                result = analyze(self.item("Amazon update", snippet=text), "AMZN")
+                self.assertEqual(
+                    (
+                        result["type"],
+                        result["materiality"],
+                        result["event_status"],
+                        result["push_eligible"],
+                    ),
+                    (kind, tier, status, push),
+                )
+        unchanged = analyze(self.item("Amazon reached a settlement; fees may be paid."), "AMZN")
+        self.assertEqual(unchanged["direction"], "unknown")
+        passive = analyze(self.item("Amazon was fined by the regulator."), "AMZN")
+        self.assertEqual(passive["materiality"], "high")
+
+    def test_long_support_and_untrusted_v3_labels_cannot_authorize_a_push(self):
+        body = "NVIDIA reported quarterly results with " + "qualified " * 35 + "financial detail."
+        result = analyze(self.item("NVIDIA update", snippet=body), "NVDA")
+        self.assertEqual(result["materiality"], "high")
+        self.assertFalse(result["push_eligible"])
+        self.assertNotIn(body, [f["text"] for f in result["facts"]])
+        forged = result | {
+            "object": "Expedia raised guidance; NVIDIA product momentum remains strong.",
+            "facts": [{"id": "s0", "text": "NVIDIA update"}],
+            "push_eligible": True,
+        }
+        self.assertEqual(safe_projection(forged)["materiality"], "low")
+        approval = analyze(self.item("NVIDIA received regulatory approval."), "NVDA")
+        self.assertFalse(
+            safe_projection(approval | {"materiality": "high", "push_eligible": True})[
+                "push_eligible"
+            ]
+        )
+        decimal = self.item(
+            snippet="NVIDIA reported quarterly revenue of $30.7 billion in the U.S. market. NVIDIA raised guidance."
+        )
+        self.assertEqual(len(sentences(decimal)), 3)
+        self.assertIn("$30.7 billion in the U.S. market.", sentences(decimal)[1]["text"])
+        clipped = self.item(
+            snippet="NVIDIA reported earnings " + "detail " * 700 + "; this claim was denied."
+        )
+        self.assertEqual(sentences(clipped), [{"id": "h", "text": clipped["headline"]}])
+
+    def test_direct_body_commentary_does_not_need_a_material_event_or_invent_an_actor(self):
+        for body in (
+            "Amazon's logistics division expanded warehouse capacity.",
+            "Amazon's stock fell following an analyst downgrade.",
+            "Amazon just shed 12% of its market value.",
+        ):
+            with self.subTest(body=body):
+                result = analyze(self.item("A sector update", snippet=body), "AMZN")
+                self.assertEqual(result["relevance"], "direct")
+                self.assertEqual(result["materiality"], "low")
+                self.assertIsNone(result["actor"])
+                self.assertFalse(result["push_eligible"])
+
+    def test_unchanged_v2_source_keeps_immutable_interpretation_and_new_targets_survive(self):
+        case = next(
+            c
+            for c in json.loads(
+                (Path(__file__).parent / "fixtures/news_events_v3.json").read_text()
+            )["cases"]
+            if c["id"] == "news-079"
+        )
+        item = self.item(**case["item"])
+        now = item["published_at"] + 60
+        legacy = case["legacy_analysis"]
+        current = analyze
+        with patch(
+            "trabe.news_event_store.analyze",
+            side_effect=lambda item, ticker: (
+                legacy.copy() if ticker == "VST" else current(item, ticker)
+            ),
+        ):
+            self.repo.ingest([item], "VST", now)
+        with self.store.connection() as db:
+            before = db.execute("SELECT * FROM event_revisions").fetchall()
+        reopened = EventStore(Store(self.store.path))
+        cached = reopened.events(["VST"], now + 1)[0]
+        self.assertEqual(cached["rules"], "events-v2")
+        self.assertEqual(cached["materiality"], "low")
+        reopened.ingest([item], "VST", now + 2)
+        reopened.ingest(
+            [
+                item
+                | {
+                    "provider": "copy",
+                    "publisher": "Other",
+                    "item_id": "copy",
+                    "url": "https://copy.example/article",
+                }
+            ],
+            "VST",
+            now + 3,
+        )
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT * FROM event_revisions").fetchall(), before)
+        self.assertEqual(analyze(item, "VST")["materiality"], "high")
+        reopened.ingest(
+            [item | {"snippet": item["snippet"] + " Vistra raised guidance."}], "VST", now + 4
+        )
+        self.assertEqual(reopened.events(["VST"], now + 5)[0]["rules"], "events-v3")
+        # A newly requested explicit ticker must remain routable even if facts match.
+        target_item = self.item(
+            "NVIDIA reports quarterly results; ACME is mentioned.",
+            item_id="targets",
+            url="https://example.com/targets",
+        )
+        self.repo.ingest([target_item], "NVDA", self.now)
+        self.repo.ingest([target_item], "ACME", self.now + 1)
+        self.assertIn("ACME", self.repo.events(["ACME"], self.now + 2)[0]["issuers"])
+
+    def test_primary_selection_prefers_direct_events_and_multiple_issuers_stay_digest_only(self):
+        item = self.item(
+            "Gatekeeper is available through AWS Marketplace; NVIDIA reported quarterly results."
+        )
+        self.repo.ingest([item], "AMZN", self.now)
+        event = self.repo.events(["AMZN"], self.now)[0]
+        self.assertEqual(event["ticker"], "NVDA")
+        self.assertEqual(set(event["issuers"]), {"AMZN", "NVDA"})
+        multi = self.item(
+            "NVIDIA raised guidance; Amazon reached a settlement.",
+            item_id="multi",
+            url="https://example.com/multi",
+        )
+        self.assertTrue(analyze(multi, "NVDA")["push_eligible"])
+        self.assertTrue(analyze(multi, "AMZN")["push_eligible"])
+        self.repo.ingest([multi], "NVDA", self.now + 1)
+        event = next(
+            e
+            for e in self.repo.events(["AMZN"], self.now + 2)
+            if e["type"] == "results" and e["action"] == "guidance change"
+        )
+        self.assertFalse(event["push_eligible"])
 
     def test_shared_database_access_serializes_workers_and_skips_idle_state_writes(self):
         import threading

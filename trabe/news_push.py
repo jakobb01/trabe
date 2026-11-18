@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from trabe.news_digest import card
 from trabe.news_event_store import PAYLOAD_LIMIT, EventStore, generation, state
-from trabe.news_events import digest, safe_projection
+from trabe.news_events import digest, present_event, safe_projection
 
 
 def quiet(settings, now):
@@ -75,6 +75,7 @@ class NewsPush:
                 eligible = event["push_eligible"] or correction
                 if (
                     not eligible
+                    or (not correction and event["ticker"] not in universe.intersection(symbols))
                     or event["seeded"]
                     or event["ambiguous"]
                     or event["known_at"] <= watermark
@@ -176,9 +177,15 @@ class NewsPush:
                     "UPDATE event_delivery_aliases SET event_id=?,created=? WHERE alias=? AND created<?",
                     (event["id"], now, class_alias, now - 14 * 86400),
                 )
+                # Display selection is downstream of frozen routing and dedupe.
+                display_symbols = event["issuers"] if correction else [event["ticker"]]
+                view = (
+                    present_event(event, self.repo.credited_source(db, event), display_symbols)
+                    or event
+                )
                 outbox_id = Outbox(self.store).send(
                     self.owner_id,
-                    "📰 Material company development\n" + card(event, compact=True, now=now),
+                    "📰 Company news alert\n" + card(view, compact=True, now=now),
                     kind="news_event",
                     db=db,
                     now=now,
@@ -227,11 +234,13 @@ class NewsPush:
             universe = Ledger._held(db) | {r[0] for r in db.execute("SELECT ticker FROM watchlist")}
             if not event or not set(json.loads(event[0])["issuers"]).intersection(universe):
                 reason = "outside_universe"
-            elif not (
-                safe_projection(json.loads(event[0]))["push_eligible"]
-                or json.loads(event[0]).get("correction")
-            ):
-                reason = "attribution_unresolved"
+            else:
+                projected = safe_projection(json.loads(event[0]))
+                if not (
+                    (projected["push_eligible"] and projected["ticker"] in universe)
+                    or projected.get("correction")
+                ):
+                    reason = "attribution_unresolved"
         if reason:
             db.execute(
                 "UPDATE event_deliveries SET status='suppressed',reason=? WHERE outbox_id=?",

@@ -5,6 +5,7 @@ import threading
 import time
 
 from trabe.advisor_results import AdvisorResults
+from trabe.advisor_shadow import AdvisorShadow
 from trabe.api import ApiError
 from trabe.fx import FX
 from trabe.insights import Insights
@@ -35,6 +36,8 @@ class Services:
         self.snapshots = SnapshotService(store)
         self.outlooks = OutlookService(store)
         self.advisor_results = AdvisorResults(store)
+        self.shadow = AdvisorShadow(store, self.advisor_results.calendar)
+        self.shadow_results = AdvisorResults(store, self.advisor_results.calendar, shadow=True)
         self.paper = Paper(store)
         self.threads = []
 
@@ -110,20 +113,21 @@ class Services:
     def outcome_work(self):
         while not self.stop.wait(30):
             try:
+                self.shadow.capture()
+                self.store.set_state("advisor_shadow_error", "")
+            except Exception:
+                logger.warning("Automatic company forecast capture deferred.")
+                self.store.set_state(
+                    "advisor_shadow_error",
+                    "Automatic capture failed; next worker check will retry.",
+                )
+            try:
                 now = time.time()
                 # Leave the pre-open preparation/issuance window to the outlook worker.
                 session = self.advisor_results.calendar.at(now)
                 if session and session.opens - 1920 <= now < session.opens - 1500:
                     continue
-                http = SignalHTTP(
-                    self.config,
-                    self.store,
-                    automatic=True,
-                    feature="advisor_results",
-                    stop=self.stop,
-                    deadline=now + 30,
-                )
-                self.advisor_results.run_once(http, now=now)
+                self.collect_company_outcomes(now)
                 self.store.set_state("advisor_results_error", "")
             except WorkStopped:
                 pass
@@ -133,6 +137,19 @@ class Services:
                     "advisor_results_error",
                     "Outcome collection failed/deferred; saved evidence retained.",
                 )
+
+    def collect_company_outcomes(self, now):
+        remaining = 2
+        for results in (self.advisor_results, self.shadow_results):
+            http = SignalHTTP(
+                self.config,
+                self.store,
+                automatic=True,
+                feature=results.feature,
+                stop=self.stop,
+                deadline=now + 30,
+            )
+            remaining -= results.collect(http, now=now, limit=remaining)
 
     def close(self):
         self.insights.close()

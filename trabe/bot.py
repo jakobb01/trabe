@@ -100,8 +100,9 @@ HELP = """trabe
 /snapshot [latest|now|YYYY-MM-DD|on|off] — frozen decision inputs
 /briefing now|cached|details|HH:MM|on|off — overview or full cached digest
 /outlook [now|cached|YYYY-MM-DD|results|on|off] — saved pre-open expectation
-/advisor [TICKER|cached TICKER|evidence TICKER] — saved five-session research
+/advisor [TICKER|cached TICKER|evidence TICKER|preview TICKER] — five-session research
 /advisor results [TICKER] | result ID | record ID | track on|off — company outcomes
+/advisor compare [TICKER] | shadow [on|off] — prospective forecast comparison
 /paper [start|on|off|status|decisions|decision ID|trades|results] — virtual stock experiment
 /set earnings_warning_days 5
 /set insider_min_value_usd 10000

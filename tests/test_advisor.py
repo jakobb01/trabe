@@ -16,6 +16,7 @@ from trabe.config import Config
 from trabe.ledger import Ledger
 from trabe.maintenance import Maintenance
 from trabe.news import News
+from trabe.outbox import Outbox
 from trabe.signals import SignalStore
 from trabe.snapshots import SnapshotService
 from trabe.store import SCHEMA_VERSION, Store
@@ -154,6 +155,34 @@ class AdvisorTests(unittest.TestCase):
         packet = self.advisor.issue("VST", self.now)
         self.assertEqual(packet["forecast"]["direction"], "mixed")
         self.assertEqual(packet["forecast"]["action"], "hold/watch")
+        report = self.advisor.report(packet)
+        self.assertIn("Mixed • no directional signal", report)
+        self.assertIn("Company stories disagree", report)
+        self.assertIn("strictly between −1% and +1%", report)
+        self.assertNotIn("company news was neutral", report)
+
+    def test_neutral_stories_have_a_mixed_call_with_no_required_gaps(self):
+        self.seed(
+            [
+                self.items[0]
+                | {
+                    "headline": "Vistra presents at energy conference",
+                    "snippet": "Vistra spoke at a regional energy conference.",
+                },
+                self.items[1]
+                | {
+                    "headline": "Vistra updates investor relations website",
+                    "snippet": "Vistra posted a new contact page on its website.",
+                },
+            ],
+            self.now - 30,
+        )
+        packet = self.advisor.issue("VST", self.now)
+        self.assertEqual(packet["forecast"]["direction"], "mixed")
+        self.assertEqual(packet["forecast"]["gaps"], [])
+        report = self.advisor.report(packet)
+        self.assertIn("Mixed • no directional signal", report)
+        self.assertIn("company news was neutral", report)
 
     def test_stale_headline_only_and_failed_source_abstain(self):
         base = self.advisor.issue("VST", self.now)["inputs"]
@@ -262,12 +291,94 @@ class AdvisorTests(unittest.TestCase):
         telegram.send.assert_not_called()
         with patch("trabe.advisor.time.time", return_value=self.now):
             text = bot.command("advisor", ["VST"])
+            self.assertEqual(bot.command("advisor", ["cached", "VST"]), text)
         self.assertIn("bullish", text)
-        self.assertIn("https://example.com/", bot.command("advisor", ["evidence", "VST"]))
-        self.assertEqual(bot.command("advisor", ["cached", "VST"]), text)
+        evidence = bot.command("advisor", ["evidence", "VST"])
+        self.assertIn("Vistra raises guidance after revenue growth.", evidence)
+        self.assertNotIn("https://example.com/", evidence)
+        self.assertIn("https://example.com/", self.advisor.handle(["evidence", "VST"]))
         with self.store.connection() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM signal_jobs").fetchone()[0], 0)
         self.assertEqual(self.news.http.calls, [])
+
+    def test_research_button_previews_missing_then_labels_frozen_and_historical_records(self):
+        telegram = Mock()
+        outbox = Outbox(self.store)
+        config = Config("100:" + "a" * 32, 123, "", self.store.path)
+        bot = Bot(config, self.store, outbox, Mock(), callback_responder=telegram)
+        bot.bot_id = 100
+        self.addCleanup(bot.scans.close)
+        Ledger(self.store).record("VST", "buy", "2", "100", "USD", "2026-11-03")
+        trades = Ledger(self.store).history("VST")
+
+        def tap(now):
+            with (
+                patch("time.time", return_value=now),
+                patch("trabe.signals.SignalHTTP._read", side_effect=AssertionError("HTTP")),
+            ):
+                _, company = bot.navigation.render("company", "VST", message_id=77)
+                research = next(
+                    item for item in company["inline_keyboard"][0] if item["text"] == "Research"
+                )
+                bot.handle(
+                    {
+                        "callback_query": {
+                            "id": "research-fixture",
+                            "data": research["callback_data"],
+                            "from": {"id": 123},
+                            "message": {
+                                "message_id": 77,
+                                "date": int(now),
+                                "chat": {"id": 123, "type": "private"},
+                                "from": {"id": 100, "is_bot": True},
+                            },
+                        },
+                    }
+                )
+                self.assertEqual(outbox.pending(), 1)
+                outbox.flush(telegram)
+                self.assertEqual(outbox.pending(), 0)
+            return telegram.edit.call_args.args[2]
+
+        preview = tap(self.now)
+        self.assertIn("No saved company research for VST", preview)
+        self.assertIn("Preview only", preview)
+        self.assertIn("Expectation: bullish", preview)
+        self.assertIsNone(self.advisor.get("VST"))
+        packet = self.advisor.issue("VST", self.now)
+        for now, state in (
+            (self.now + 1, "upcoming"),
+            (packet["opens"], "underway"),
+            (packet["closes"], "complete"),
+        ):
+            text = tap(now)
+            self.assertIn(f"Target window {state}", text)
+            self.assertIn("Expectation: bullish", text)
+            self.assertNotIn("Preview only", text)
+        self.assertEqual(self.advisor.get("VST"), packet)
+        self.assertEqual(Ledger(self.store).history("VST"), trades)
+        telegram.send.assert_not_called()
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM company_advice").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM signal_jobs").fetchone()[0], 0)
+
+    def test_recovered_preview_does_not_replace_frozen_abstention(self):
+        self.signals.fail("news", "yahoo-rss", "VST", "Fixture outage", self.now - 5)
+        with patch("time.time", return_value=self.now):
+            text = self.advisor.handle(["cached", "VST"])
+        self.assertIn("No forecast • required evidence missing (unscored)", text)
+        self.assertIn("source failures", text)
+        self.assertIn("/news refresh VST", text)
+        self.assertIsNone(self.advisor.get("VST"))
+
+        packet = self.advisor.issue("VST", self.now)
+        self.signals.ok("news", "yahoo-rss", "VST", self.now + 1)
+        with patch("time.time", return_value=self.now + 2):
+            preview = self.advisor.handle(["preview", "VST"])
+            self.assertIn("Expectation: bullish", preview)
+            self.assertIn(f"already has a frozen record. /advisor record {packet['id']}", preview)
+            self.assertIn("No forecast", self.advisor.handle(["VST"]))
+        self.assertEqual(self.advisor.get("VST"), packet)
 
 
 if __name__ == "__main__":

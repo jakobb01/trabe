@@ -170,6 +170,8 @@ class Ledger:
         with self.store.connection() as db:
             return self._held(db)
 
-    def coverage(self):
-        with self.store.connection() as db:
-            return self._held(db) | {row[0] for row in db.execute("SELECT ticker FROM watchlist")}
+    def coverage(self, db=None):
+        if db is None:
+            with self.store.connection() as connection:
+                return self.coverage(connection)
+        return self._held(db) | {row[0] for row in db.execute("SELECT ticker FROM watchlist")}

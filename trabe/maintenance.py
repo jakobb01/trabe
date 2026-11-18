@@ -165,6 +165,7 @@ class Maintenance:
 
     def expire(self, now: float):
         from trabe.advisor import Advisor
+        from trabe.advisor_shadow import AdvisorShadow
         from trabe.news_event_store import EventStore
         from trabe.news_store import NewsStore
         from trabe.outlook import OutlookStore
@@ -186,6 +187,7 @@ class Maintenance:
             SnapshotStore(self.store).prune(now, db)
             OutlookStore(self.store).prune(now, db)
             Advisor(self.store).prune(now, db)
+            AdvisorShadow.prune(now, db)
             if not self.store.state("storage_paused"):
                 Paper(self.store).prune(now, db)
             EndpointStore(self.store).prune(now, db)

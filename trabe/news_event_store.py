@@ -1,6 +1,8 @@
 """Bounded presentation audit, isolated from NewsStore and strategy inputs."""
 
 import json
+import logging
+import sqlite3
 import time
 import uuid
 
@@ -10,6 +12,7 @@ from trabe.news_events import (
     digest,
     encoded,
     facts_hash,
+    present_event,
     safe_projection,
     sentences,
     words,
@@ -17,6 +20,9 @@ from trabe.news_events import (
 
 TTL = 14 * 86400
 PAYLOAD_LIMIT = 16 * 1024 * 1024
+SUMMARY_SAMPLE_LIMIT = 30
+SUMMARY_SAMPLE_BYTES = 16 * 1024
+logger = logging.getLogger(__name__)
 EVENT_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS event_evidence(
         id TEXT PRIMARY KEY,provider TEXT NOT NULL,item_id TEXT NOT NULL,url TEXT NOT NULL,
@@ -58,6 +64,12 @@ EVENT_SCHEMA = (
         alias TEXT PRIMARY KEY,event_id TEXT NOT NULL,created REAL NOT NULL)""",
     """CREATE TRIGGER IF NOT EXISTS event_revision_immutable BEFORE UPDATE ON event_revisions
         BEGIN SELECT RAISE(ABORT,'immutable event revision'); END""",
+    f"""CREATE TABLE IF NOT EXISTS news_summary_samples(
+        briefing_key TEXT NOT NULL,position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 3),
+        as_of REAL NOT NULL,ticker TEXT NOT NULL,payload TEXT NOT NULL
+            CHECK(length(CAST(payload AS BLOB))<={SUMMARY_SAMPLE_BYTES}),
+        PRIMARY KEY(briefing_key,position))""",
+    "CREATE INDEX IF NOT EXISTS news_summary_samples_time ON news_summary_samples(as_of)",
 )
 
 
@@ -68,6 +80,38 @@ def state(db, key, default=""):
 
 def generation(db):
     return int(state(db, "news_event_generation", "0"))
+
+
+def _prune_summary_samples(db, now):
+    db.execute("DELETE FROM news_summary_samples WHERE as_of<?", (now - TTL,))
+
+
+def save_briefing_samples(db, key, now, samples):
+    """Retain bounded snapshots in the existing scheduled notification transaction."""
+    db.execute("SAVEPOINT news_summary_sample_write")
+    try:
+        _prune_summary_samples(db, now)
+        for position, sample in enumerate(samples[:3], 1):
+            if "source" not in sample:
+                continue
+            raw = encoded(sample)
+            if len(raw.encode()) <= SUMMARY_SAMPLE_BYTES:
+                db.execute(
+                    "INSERT INTO news_summary_samples VALUES (?,?,?,?,?) "
+                    "ON CONFLICT(briefing_key,position) DO NOTHING",
+                    (key, position, now, sample["ticker"], raw),
+                )
+        db.execute(
+            """DELETE FROM news_summary_samples WHERE rowid IN (
+                SELECT rowid FROM news_summary_samples
+                ORDER BY as_of DESC,briefing_key DESC,position LIMIT -1 OFFSET ?)""",
+            (SUMMARY_SAMPLE_LIMIT,),
+        )
+    except sqlite3.Error:
+        db.execute("ROLLBACK TO news_summary_sample_write")
+        logger.warning("Scheduled briefing news comparison could not be retained.")
+    finally:
+        db.execute("RELEASE news_summary_sample_write")
 
 
 class EventStore:
@@ -144,6 +188,7 @@ class EventStore:
             with self.store.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 return self.prune(now, connection)
+        _prune_summary_samples(db, now)
         db.execute(
             "DELETE FROM event_deliveries WHERE created<? AND status NOT IN ('pending','queued')",
             (now - 30 * 86400,),
@@ -240,8 +285,9 @@ class EventStore:
         for item in items[:100]:
             if not 0 <= now - item["published_at"] <= TTL:
                 continue
-            targets = [s for s in dict.fromkeys([ticker, *ALIASES]) if analyze(item, s)["issuer"]]
-            analyses = [analyze(item, s) for s in targets]
+            analyses = [analyze(item, s) for s in dict.fromkeys([ticker, *ALIASES])]
+            analyses = [a for a in analyses if a["issuer"]]
+            targets = [a["ticker"] for a in analyses]
             # Subject first; multiple explicit issuers remain visible and digest-only.
             from trabe.news_events import contains
 
@@ -252,7 +298,13 @@ class EventStore:
                     for alias in aliases
                     if contains(item["headline"], alias)
                 ]
-                return (not analysis["direct"], min(positions, default=9999), analysis["ticker"])
+                return (
+                    not (analysis["direct"] and analysis["actor"]),
+                    not analysis["direct"],
+                    -{"high": 3, "medium": 2, "low": 1}[analysis["materiality"]],
+                    min(positions, default=9999),
+                    analysis["ticker"],
+                )
 
             analyses.sort(key=position)
             primary = analyses[0] if analyses else analyze(item, ticker)
@@ -309,10 +361,50 @@ class EventStore:
     def _observe(self, db, item, targets, analysis, payload, now):
         content = digest(encoded(payload))
         evidence = digest(encoded([item["provider"], item["item_id"], content]))
-        fact_hash = facts_hash(analysis)
+        correction = bool(
+            item.get("correction_of")
+            or item["headline"].lower().startswith(("correction:", "retraction:"))
+        )
         signature = digest(
             encoded([analysis["issuers"], words(item["headline"]), analysis["event_date"]])
         )
+        # A parser/version/metadata change is not new source evidence. Preserve the
+        # immutable interpretation, including across publisher copies and restarts.
+        # New target bindings and explicit corrections still take the normal path.
+        unchanged = None
+        if not correction:
+            candidates = db.execute(
+                "SELECT b.event_id,b.revision,e.id,e.content_hash,e.payload FROM event_bindings b JOIN event_evidence e ON e.id=b.evidence WHERE e.url=? OR (e.provider=? AND e.item_id=?) ORDER BY e.received DESC",
+                (item["url"], item["provider"], item["item_id"]),
+            ).fetchall()
+            candidates += db.execute(
+                "SELECT b.event_id,b.revision,e.id,e.content_hash,e.payload FROM news_events n JOIN event_bindings b ON b.event_id=n.id JOIN event_evidence e ON e.id=b.evidence WHERE n.signature=? ORDER BY e.received DESC",
+                (signature,),
+            ).fetchall()
+            for event_id, revision, prior_evidence, previous_content, raw in candidates:
+                previous = json.loads(raw)
+                same_source = previous_content == content or (
+                    not payload.get("partial")
+                    and not previous.get("partial")
+                    and all(previous.get(k) == payload[k] for k in ("headline", "snippet"))
+                )
+                if not same_source:
+                    continue
+                previous_targets = {
+                    r[0]
+                    for r in db.execute(
+                        "SELECT ticker FROM event_targets WHERE evidence=?", (prior_evidence,)
+                    )
+                }
+                if previous_targets == set(targets) | set(analysis["issuers"]):
+                    unchanged = event_id, revision
+                    break
+        if unchanged:
+            event_id, revision = unchanged
+            db.execute("UPDATE news_events SET last_seen=? WHERE id=?", (now, event_id))
+            self._bind(db, item, targets, payload, content, evidence, event_id, revision, now)
+            return
+        fact_hash = facts_hash(analysis)
         old = db.execute(
             "SELECT b.event_id FROM event_bindings b JOIN event_evidence e ON e.id=b.evidence WHERE e.url=? OR (e.provider=? AND e.item_id IN (?,?)) ORDER BY e.received DESC LIMIT 1",
             (item["url"], item["provider"], item["item_id"], item.get("correction_of", "")),
@@ -357,10 +449,7 @@ class EventStore:
             "SELECT id FROM event_revisions WHERE event_id=? ORDER BY known_at DESC,rowid DESC LIMIT 1",
             (event_id,),
         ).fetchone()
-        analysis["correction"] = bool(
-            item.get("correction_of")
-            or item["headline"].lower().startswith(("correction:", "retraction:"))
-        )
+        analysis["correction"] = correction
         if old and prior and analysis["correction"]:
             previous = db.execute(
                 "SELECT payload FROM event_revisions WHERE id=?", (prior[0],)
@@ -381,6 +470,11 @@ class EventStore:
                 "UPDATE news_events SET materiality=? WHERE id=?",
                 (analysis["materiality"], event_id),
             )
+        targets = sorted(set(targets) | set(analysis["issuers"]))
+        self._bind(db, item, targets, payload, content, evidence, event_id, revision, now)
+
+    @staticmethod
+    def _bind(db, item, targets, payload, content, evidence, event_id, revision, now):
         db.execute(
             "INSERT OR IGNORE INTO event_evidence VALUES (?,?,?,?,?,?,?,?)",
             (
@@ -394,7 +488,6 @@ class EventStore:
                 encoded(payload),
             ),
         )
-        targets = sorted(set(targets) | set(analysis["issuers"]))
         db.executemany(
             "INSERT OR IGNORE INTO event_targets VALUES (?,?)", [(evidence, s) for s in targets]
         )
@@ -402,7 +495,19 @@ class EventStore:
             "INSERT OR IGNORE INTO event_bindings VALUES (?,?,?)", (event_id, revision, evidence)
         )
 
-    def events(self, symbols, now, *, context=False, audit=False):
+    @staticmethod
+    def credited_source(db, event):
+        row = db.execute(
+            "SELECT payload FROM event_evidence WHERE id=?", (event["sources"][0]["id"],)
+        ).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def events(
+        self, symbols, now, *, context=False, audit=False, presentation=False, comparison=False
+    ):
+        symbols = set(symbols)
+        result = []
+        cached_sources = {}
         with self.store.connection() as db:
             window = TTL if audit else 7 * 86400 if context else 72 * 3600
             rows = db.execute(
@@ -412,49 +517,68 @@ class EventStore:
                 AND ((e.published BETWEEN ? AND ?) OR (json_extract(r.payload,'$.correction')=1 AND r.known_at BETWEEN ? AND ?))""",
                 (now, now - window, now, now - window, now),
             ).fetchall()
-            result = []
             for event_id, first, published, ambiguous, revision, known, raw in rows:
                 analysis = safe_projection(json.loads(raw))
                 if not set(analysis["issuers"]).intersection(symbols):
                     continue
                 sources = []
-                for provider, url, received, publisher in db.execute(
-                    "SELECT e.provider,e.url,e.received,json_extract(e.payload,'$.publisher') FROM event_evidence e JOIN event_bindings b ON b.evidence=e.id WHERE b.revision=? AND e.received<=? ORDER BY CASE json_extract(e.payload,'$.role') WHEN 'issuer' THEN 0 ELSE 1 END,e.received,e.id",
+                for evidence_id, provider, url, received, source_published, publisher in db.execute(
+                    "SELECT e.id,e.provider,e.url,e.received,e.published,json_extract(e.payload,'$.publisher') FROM event_evidence e JOIN event_bindings b ON b.evidence=e.id WHERE b.revision=? AND e.received<=? ORDER BY CASE json_extract(e.payload,'$.role') WHEN 'issuer' THEN 0 ELSE 1 END,e.received,e.id",
                     (revision, now),
                 ):
-                    # Digests consume frozen facts and small source metadata, not
-                    # every retained full extract/sentence object in the audit.
                     sources.append(
                         {
+                            "id": evidence_id,
                             "publisher": publisher or provider,
                             "provider": provider,
                             "url": url,
                             "received": received,
+                            "published": source_published,
                         }
                     )
-                if sources:
-                    result.append(
-                        analysis
-                        | {
-                            "id": event_id,
-                            "revision": revision,
-                            "known_at": known,
-                            "first_seen": first,
-                            "published": published,
-                            "ambiguous": bool(ambiguous),
-                            "sources": sources,
-                        }
-                    )
-            return sorted(
-                result,
-                key=lambda e: (
-                    -{"high": 3, "medium": 2, "low": 1}[e["materiality"]],
-                    -e["known_at"],
-                    not e["direct"],
-                    e["quality"] == "headline_only",
-                    e["id"],
-                ),
-            )
+                if not sources:
+                    continue
+                event = analysis | {
+                    "id": event_id,
+                    "revision": revision,
+                    "known_at": known,
+                    "first_seen": first,
+                    "published": published,
+                    "ambiguous": bool(ambiguous),
+                    "sources": sources,
+                }
+                if presentation:
+                    # Read just the evidence credited on the card. Never mix the
+                    # excerpts of different publishers or create a revision.
+                    cached_sources[event_id] = self.credited_source(db, event)
+                result.append(event)
+        if presentation:
+            projected = []
+            for event in result:
+                payload = cached_sources[event["id"]]
+                view = present_event(event, payload, symbols)
+                if view is None:
+                    continue
+                if comparison and payload.get("headline"):
+                    view["comparison"] = {
+                        "source": event["sources"][0] | {"payload": payload},
+                        "previous_facts": event["facts"][:1],
+                        "previous_materiality": event["materiality"],
+                    }
+                projected.append(view)
+            result = projected
+        return sorted(
+            result,
+            key=lambda e: (
+                -{"high": 3, "medium": 2, "low": 1}[e["materiality"]],
+                bool(e.get("display_context")),
+                e.get("display_context") == "Commentary",
+                -e["known_at"],
+                not e["direct"],
+                e["quality"] == "headline_only",
+                e["id"],
+            ),
+        )
 
     def coverage_lines(self, symbols, now):
         with self.store.connection() as db:

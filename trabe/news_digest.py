@@ -167,6 +167,22 @@ class NewsDigest:
         parts.append("Additional company cards: /news cached TICKER.")
         return parts
 
+    def inline_page(self, symbols, now, page, *, earlier=False):
+        """Each retained card has its own page, even at the full excerpt length."""
+        events = self.repo.events(symbols, now, context=earlier, presentation=True)
+        if earlier:
+            cutoff = now - 72 * 3600
+            events = [
+                e
+                for e in events
+                if e["published"] < cutoff and not (e.get("correction") and e["known_at"] >= cutoff)
+            ]
+        count = len(events)
+        page = min(page, max(0, count - 1))
+        if not count:
+            return "No cached developments in this view.", page, count
+        return card(events[page], now=now), page, count
+
     def report(self, symbols, now, *, page=0, sources=False):
         if not symbols:
             return "News: no held or watched symbols."

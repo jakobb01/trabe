@@ -15,7 +15,7 @@ outbound; no website, webhook or exposed application port is needed.
 - Compact briefings with premarket prices, SPY/QQQ, VIX and details on demand.
 - Saved pre-open market outlooks with separate later assessments.
 - Five-session company research with frozen evidence and explicit data gaps.
-- Inline Today / Companies / Portfolio / Settings cards and a six-command menu.
+- Inline briefing, paged company news, Advisor, portfolio, reports and settings, plus a six-command menu.
 - Company-event digests with named sources, issuer feeds and opt-in material news alerts.
 - Silent company outcome scoring and a separate USD 2,000 paper experiment.
 

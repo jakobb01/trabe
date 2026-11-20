@@ -11,11 +11,26 @@ release evidence are kept outside Git.
 
 ## Telegram controls
 
-Open `/home` for Today / Companies / Portfolio / Settings. Company cards link to
-News / saved Research / Earnings / Insiders. News has Sources / More / Refresh;
-Refresh queues the existing background job and returns cached status immediately.
-Cached navigation never requests provider data, issues research or starts paper
-trading. Research creation remains the explicit `/advisor TICKER` command.
+Open `/home` for the inline menu. Buttons update the same Telegram message.
+
+| Home card | What you can open |
+| --- | --- |
+| Today | Cached briefing, News and market outlook |
+| News | All companies or one held or watched company, one full card per page, source coverage and earlier reporting |
+| Advisor | Saved research, evidence and preview by company, scoped or overall results and comparison, and automatic sampling status |
+| Companies | News, Advisor research, earnings and insiders by held or watched company |
+| Portfolio | Cached holdings, open-position details and transaction history, and the paper experiment |
+| Reports | Market outlook and results, cached prices, alerts, last scan, latest saved snapshot, and paper status, results, decisions and fills |
+| Settings | Existing automation and news preferences |
+
+In News, **Previous** and **Next** appear where more cards are available.
+**Sources** and **Earlier coverage** return to the same company and page. The
+order reflects the latest cache. **Refresh news** queues a background refresh for
+the current scope, keeps the cached card visible and sends the result separately.
+
+Reports use cached data. Use `/advisor TICKER` to save a forecast and the existing
+manual commands to capture a snapshot, issue an outlook, start the paper
+experiment or record trades.
 
 The expandable everyday menu has home, briefing, news, portfolio, status and help.
 `/help advanced` lists every existing advanced command. `/start` and `/menu` open

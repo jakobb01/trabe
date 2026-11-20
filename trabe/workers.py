@@ -16,6 +16,7 @@ from trabe.paper import Paper
 from trabe.portfolio import Portfolio
 from trabe.signals import SignalHTTP, WorkStopped
 from trabe.snapshots import SnapshotService
+from trabe.weather import Weather
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class Services:
         self.shadow = AdvisorShadow(store, self.advisor_results.calendar)
         self.shadow_results = AdvisorResults(store, self.advisor_results.calendar, shadow=True)
         self.paper = Paper(store)
+        self.weather = Weather(store, outbox, config.owner_id)
         self.threads = []
 
     def start(self):
@@ -51,6 +53,7 @@ class Services:
             (self.outcome_work, "company-outcomes"),
             (self.paper_work, "paper-execution"),
             (self.news_event_work, "company-presentation"),
+            (self.weather_work, "weather"),
         ):
             thread = threading.Thread(target=target, daemon=True, name=name)
             thread.start()
@@ -99,6 +102,25 @@ class Services:
                         )
                 except Exception:
                     pass
+
+    def weather_work(self):
+        failed = True  # Clear a persisted worker error on the first successful check after restart.
+        while not self.stop.is_set():
+            try:
+                self.weather.run_once()
+                if failed:
+                    self.store.set_state("weather_error", "")
+                    failed = False
+            except Exception:
+                logger.warning("Weather work deferred.")
+                failed = True
+                try:
+                    self.store.set_state(
+                        "weather_error", "Weather worker delayed; see the next check."
+                    )
+                except Exception:
+                    pass
+            self.stop.wait(10)
 
     def portfolio_work(self):
         while not self.stop.is_set():

@@ -70,7 +70,7 @@ def _run(config: Config, *, telegram, market, stop_event, poll_timeout):
     store.interrupt_scans()
     store.set_state("last_poll", "0")
     telegram = telegram or Telegram(config.token)
-    outbox = Outbox(store)
+    outbox = Outbox(store, owner_id=config.owner_id)
     market = market or MarketRouter(config, store)
     services = Services(store, config, market, outbox, telegram)
     bot = Bot(

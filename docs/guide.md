@@ -20,7 +20,7 @@ Open `/home` for the inline menu. Buttons update the same Telegram message.
 | Advisor | Saved research, evidence and preview by company, scoped or overall results and comparison, and automatic sampling status |
 | Companies | News, Advisor research, earnings and insiders by held or watched company |
 | Portfolio | Cached holdings, open-position details and transaction history, and the paper experiment |
-| Reports | Market outlook and results, cached prices, alerts, last scan, latest saved snapshot, and paper status, results, decisions and fills |
+| Reports | Weather, market outlook and results, cached prices, alerts, last scan, latest saved snapshot, and paper status, results, decisions and fills |
 | Settings | Existing automation and news preferences |
 
 In News, **Previous** and **Next** appear where more cards are available.
@@ -28,11 +28,11 @@ In News, **Previous** and **Next** appear where more cards are available.
 order reflects the latest cache. **Refresh news** queues a background refresh for
 the current scope, keeps the cached card visible and sends the result separately.
 
-Reports use cached data. Use `/advisor TICKER` to save a forecast and the existing
-manual commands to capture a snapshot, issue an outlook, start the paper
-experiment or record trades.
+Market and paper reports open saved data. Use `/advisor TICKER` to save a forecast
+and the existing manual commands to capture a snapshot, issue an outlook, start
+the paper experiment or record trades.
 
-The expandable everyday menu has home, briefing, news, portfolio, status and help.
+The expandable everyday menu has home, briefing, news, weather, portfolio, status and help.
 `/help advanced` lists every existing advanced command. `/start` and `/menu` open
 Home and remove the old large reply keyboard; startup and `/help` also remove it.
 Only the paired owner in their private chat can read or modify the app. Buttons
@@ -52,12 +52,57 @@ explicitly set on/off and cannot repeat a mutation after callback replay.
 | `/settings`, `/set NAME VALUE` | Saved preferences |
 | `/set timezone Europe/Ljubljana` | IANA timezone for display and local scheduling |
 | `/schedule HH:MM\|off` | Weekday daily-change scan schedule |
+| `/weather` | Local forecast, delivery schedule and provider setup |
 | `/pause 24h`, `/resume` | Pause/resume automation; manual commands remain available |
 
 There are no default symbols. Removing a watched symbol does not delete its
 holdings. Held and watched symbols share the 50-symbol subscription allowance.
 Tier is an organizational label, not alert severity. Telegram does not report
 timezone changes when you travel; change the saved timezone explicitly.
+
+### Standalone weather
+
+Open **Home → Reports → Weather** or use `/weather`. Automatic delivery starts
+off. In **Location → Set location**, share one static Telegram pin or type latitude
+and longitude in decimal degrees, such as `46.05, 14.50`. Setup prompts expire
+after five minutes. **Location** also lets you add or clear an optional label,
+replace the pin, or clear the location and turn delivery off.
+
+In **Provider setup**, read and explicitly accept the MET Norway terms and enter
+a real service email or public HTTPS contact page where MET can reach you. MET
+Norway receives the selected coordinates truncated to four decimals, the service
+contact in trabe’s User-Agent, and the server’s network address. The contact is
+saved in the private SQLite database and omitted from weather status.
+Withdraw acceptance or clear the contact in the same menu to stop requests and
+turn delivery off. [MET Norway Terms of Service](https://docs.api.met.no/doc/TermsOfService)
+
+Use **Set times**, **Days**, **Set timezone** and **Turn on** to deliver one to
+four distinct `HH:MM` times on each selected day. Times start at 07:00 every day.
+Weather copies the bot’s saved IANA timezone on first initialization and keeps
+its own timezone after that. The card shows the next eligible slot and any skip
+or provider status. Spring-forward gaps are skipped and a repeated fall-back
+time uses its first occurrence. After a short interruption, only the newest
+eligible slot within 30 minutes can catch up. Edits apply to future slots.
+Local dates and times already queued count toward the four-per-day limit across
+edits and restarts. Global pause and storage guards suppress weather work.
+
+**Forecast preview** shows usable saved data and queues a background check when
+the provider gate allows it. Scheduled messages can share the same forecast
+issue time. Weather waits at least three hours between requests for the same
+coordinates, with a small randomized delay, and also honors `Expires` and
+`Retry-After`. It revalidates using the saved `Last-Modified` when available.
+Weather surfaces provider refusals, throttling, and deprecation in Telegram.
+If an update fails, usable saved data can still appear with the provider status.
+HTTP 203 surfaces deprecation without adopting a new payload.
+
+Previews and messages summarize the next 24 hours in the weather timezone.
+They include the available temperature, wind and non-overlapping precipitation
+periods, with a local wet-weather window when supported. Weather labels partial
+coverage and issues 12 hours or older. Delivery requires usable upcoming data
+from an issue less than 36 hours old.
+Weather cards credit MET Norway for the summarized data and link to the source
+and license. [Locationforecast 2.0](https://api.met.no/weatherapi/locationforecast/2.0/documentation)
+· [Licensing and Data Policy](https://developer.yr.no/doc/License/)
 
 ### Portfolio and FX
 
@@ -478,6 +523,7 @@ Financial transactions and their FX provenance do not expire with market history
 | Presentation event audit | 14-day target; 1,000 evidence records globally / 100 per ticker, 250 roots / 4 revisions each; 8 KiB evidence / 4 KiB revision; 16 MiB combined serialized budget |
 | News delivery identities / aliases | 30 days, 2,000 compact keys combined; evidence expiry never deletes an identity |
 | UI tokens | 256 opaque owner/message-bound tokens, 24 hours |
+| Weather cache and slot history | Up to 16 coordinate fingerprints with bounded forecast samples and request gates; only entries with elapsed gates can be evicted. Slot identities retain the current local day and up to eight earlier days when new slots are recorded. |
 | Parsed public articles | 32 documents, 128 KiB each; six-hour refresh, seven-day expiry, one-hour negative cache |
 | Automatic database backups | Three retained plus one protected during deployment; three-month age limit |
 | Manual database backups | User-managed; never pruned automatically |

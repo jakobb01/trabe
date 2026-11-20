@@ -9,8 +9,9 @@ from trabe.store import Store
 
 
 class Outbox:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, *, owner_id=None):
         self.store = store
+        self.owner_id = owner_id
 
     def send(self, chat_id, text, *, reply_markup=None, kind="reply", db=None, now=None):
         now = time.time() if now is None else now
@@ -58,12 +59,15 @@ class Outbox:
         now = time.time() if now is None else now
         from trabe.navigation import bind_markup
         from trabe.news_push import NewsPush
+        from trabe.weather import KINDS, delivered, delivery_allowed
 
         with self.store.connection() as db:
             NewsPush(self.store, 0).expire(now, db)
             db.execute("DELETE FROM outbox WHERE created_at < ?", (now - 86400,))
             if self.store.automation_paused(now):
-                db.execute("DELETE FROM outbox WHERE kind!='reply'")
+                db.execute(
+                    "DELETE FROM outbox WHERE kind NOT IN ('reply','weather','weather_preview')"
+                )
             if self.store.settings()["monitoring"] == "off":
                 db.execute("DELETE FROM outbox WHERE kind='alert'")
             rows = db.execute(
@@ -83,6 +87,12 @@ class Outbox:
                 if kind == "news_event":
                     policy = NewsPush.flush_policy(self.store, db, item_id, now)
                     if policy != "send":
+                        continue
+                elif kind in KINDS:
+                    if chat_id != self.owner_id:
+                        db.execute("DELETE FROM outbox WHERE id=?", (item_id,))
+                        continue
+                    if not delivery_allowed(db, item_id, self.owner_id, now):
                         continue
                 elif (
                     (kind != "reply" and self.store.automation_paused(now))
@@ -132,6 +142,8 @@ class Outbox:
                     "UPDATE event_deliveries SET status='delivered',reason='' WHERE outbox_id=? AND status='queued'",
                     (item_id,),
                 )
+                if kind == "weather":
+                    delivered(db, item_id)
                 db.execute("DELETE FROM outbox WHERE id=?", (item_id,))
             sent += 1
 

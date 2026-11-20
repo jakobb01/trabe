@@ -17,6 +17,8 @@ from trabe.outbox import Outbox
 from trabe.paper import Paper
 from trabe.snapshots import SnapshotService
 from trabe.store import Store
+from trabe.weather import preferences
+from trabe.weather_met import TERMS_URL
 
 
 class NavigationTests(unittest.TestCase):
@@ -29,7 +31,7 @@ class NavigationTests(unittest.TestCase):
         self.transport = Mock()
         self.transport.send.return_value = {"message_id": 77}
         self.transport.edit.return_value = {"message_id": 77}
-        self.outbox = Outbox(self.store)
+        self.outbox = Outbox(self.store, owner_id=self.config.owner_id)
         self.bot = Bot(
             self.config, self.store, self.outbox, Mock(), callback_responder=self.transport
         )
@@ -68,6 +70,7 @@ class NavigationTests(unittest.TestCase):
             button["text"]: button["callback_data"]
             for row in self.markup["inline_keyboard"]
             for button in row
+            if "callback_data" in button
         }
 
     def tap(self, name):
@@ -86,6 +89,99 @@ class NavigationTests(unittest.TestCase):
             return tuple(
                 db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables
             )
+
+    def test_weather_controls_from_reports_and_slash_without_provider_http(self):
+        pos = {"latitude": 46.05029, "longitude": 14.50009}
+
+        def input_message(**values):
+            self.bot.handle(
+                {"message": {"chat": {"id": 123, "type": "private"}, "from": {"id": 123}} | values}
+            )
+            self.outbox.flush(self.transport)
+            self.message = self.transport.send.call_args.args[1]
+            self.markup = self.transport.send.call_args.kwargs["reply_markup"]
+            return self.message
+
+        with patch(
+            "trabe.weather_met.fetch", side_effect=AssertionError("MET in Telegram handler")
+        ):
+            self.open_home()
+            self.tap("Reports")
+            self.assertIn("Automatic delivery • Off", self.tap("Weather"))
+            input_message(text="/weather")
+            self.tap("Location")
+            self.tap("Set location")
+            self.bot.handle(
+                {
+                    "message": {
+                        "chat": {"id": 123, "type": "private"},
+                        "from": {"id": 999},
+                        "location": pos,
+                    }
+                }
+            )
+            self.assertEqual(self.outbox.pending(), 0)
+            self.assertIn("static pin", input_message(location=pos | {"live_period": 60}))
+            self.assertIn("directly", input_message(location=pos, forward_origin={"type": "user"}))
+            self.assertIn("Location saved", input_message(location=pos))
+            self.tap("Location")
+            self.tap("Set label")
+            self.assertIn("Celje", input_message(text="Celje"))
+            self.tap("Set times")
+            self.assertIn("distinct", input_message(text="07:00 07:00"))
+            self.assertIn(
+                "07:00, 09:05, 12:30, 18:00", input_message(text="18:00  07:00,09:05 12:30")
+            )
+            self.tap("Set timezone")
+            self.assertIn("Europe/Oslo", input_message(text="Europe/Oslo"))
+            self.tap("Days")
+            self.tap("✓ Sat")
+            self.tap("✓ Sun")
+            self.assertIn("Mon Tue Wed Thu Fri at", self.tap("Weather"))
+            self.assertIn("accept", self.tap("Forecast preview"))
+            self.tap("Weather")
+            self.tap("Provider setup")
+            self.assertEqual(self.markup["inline_keyboard"][0][0]["url"], TERMS_URL)
+            self.tap("I accept the MET terms")
+            self.tap("Set contact")
+            self.assertIn("real service email", input_message(text=".@trabe-fixture.org"))
+            self.assertNotIn(
+                "operator@trabe-fixture.org", input_message(text="operator@trabe-fixture.org")
+            )
+            self.assertIn("Next •", self.tap("Turn on"))
+            self.assertIn("Preview queued", self.tap("Forecast preview"))
+            with self.store.connection() as db:
+                settings = preferences(db)
+                self.assertEqual(settings["coordinates"], "46.0502,14.5000")
+                self.assertGreater(settings["preview_until"], 0)
+            self.tap("Weather")
+            self.assertIn("Automatic delivery • Off", self.tap("Turn off"))
+            self.tap("Location")
+            self.assertIn("Unset", self.tap("Clear location"))
+            with self.store.connection() as db:
+                self.assertEqual(preferences(db)["coordinates"], "")
+
+    def test_weather_prompt_expires_without_accepting_later_pin(self):
+        self.open_home()
+        self.tap("Reports")
+        self.tap("Weather")
+        self.tap("Location")
+        self.tap("Set location")
+        with self.store.connection() as db:
+            db.execute("UPDATE weather_settings SET prompt_until=1")
+        self.bot.handle(
+            {
+                "message": {
+                    "chat": {"id": 123, "type": "private"},
+                    "from": {"id": 123},
+                    "location": {"latitude": 42, "longitude": 13},
+                }
+            }
+        )
+        self.outbox.flush(self.transport)
+        self.assertIn("expired", self.transport.send.call_args.args[1])
+        with self.store.connection() as db:
+            self.assertEqual(preferences(db)["coordinates"], "")
 
     def test_home_send_binds_tokens_and_callback_ack_precedes_cached_edit(self):
         self.bot.handle(
@@ -119,7 +215,8 @@ class NavigationTests(unittest.TestCase):
             self.transport.edit.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["text"],
         )
         self.assertEqual(
-            [c for c, _ in COMMANDS], ["home", "briefing", "news", "portfolio", "status", "help"]
+            [c for c, _ in COMMANDS],
+            ["home", "briefing", "news", "weather", "portfolio", "status", "help"],
         )
 
     def test_foreign_sender_chat_bot_author_and_inaccessible_messages_are_silent(self):

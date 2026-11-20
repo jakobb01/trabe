@@ -17,6 +17,7 @@ from trabe.preferences import DESCRIPTIONS
 from trabe.scans import Scans
 from trabe.snapshots import SnapshotService
 from trabe.store import Store
+from trabe.weather_ui import accept_input
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ COMMANDS = [
     ("home", "Today, companies, portfolio and settings"),
     ("briefing", "Morning briefing and cached details"),
     ("news", "Company developments and source links"),
+    ("weather", "Local forecast preview and delivery settings"),
     ("portfolio", "Recorded holdings"),
     ("status", "Service health"),
     ("help", "Help and advanced commands"),
@@ -97,6 +99,7 @@ HELP = """trabe
 /earnings [TICKER|cached [TICKER]|refresh [TICKER]|on|off] — earnings and results
 /insiders [TICKER|cached [TICKER]|refresh [TICKER]|on|off] — purchases
 /news [TICKER|cached [TICKER]|refresh [TICKER]|on|off|sources] — company news
+/weather — local forecast and delivery settings
 /snapshot [latest|now|YYYY-MM-DD|on|off] — frozen decision inputs
 /briefing now|cached|details|HH:MM|on|off — overview or full cached digest
 /outlook [now|cached|YYYY-MM-DD|results|on|off] — saved pre-open expectation
@@ -207,6 +210,13 @@ class Bot:
         text = message.get("text", "")
         if not isinstance(text, str):
             return
+        if not text.startswith("/"):
+            if note := accept_input(self.store, message):
+                card, markup = self.navigation.render("weather")
+                self.telegram.send(self.config.owner_id, note + "\n\n" + card, reply_markup=markup)
+                return
+            if "location" in message:
+                return
         text = BUTTONS.get(text, text)
         if not text.startswith("/"):
             self.telegram.send(self.config.owner_id, "Use the Telegram command menu or /help.")
@@ -217,6 +227,10 @@ class Bot:
             return
         try:
             self.update_id = update.get("update_id")
+            if command.lower() == "weather" and not parts[1:]:
+                text, markup = self.navigation.render("weather")
+                self.telegram.send(self.config.owner_id, text, reply_markup=markup)
+                return
             if command.lower() in ("home", "start", "menu") and not parts[1:]:
                 if command.lower() in ("start", "menu"):
                     self.telegram.send(
@@ -252,11 +266,17 @@ class Bot:
             return extra
         if command in ("home", "start", "menu"):
             return self.navigation.render()[0]
+        if command == "weather":
+            return (
+                "Open /weather for the forecast and settings."
+                if args
+                else self.navigation.render("weather")[0]
+            )
         if command == "help":
             return (
                 HELP
                 if args == ["advanced"]
-                else "Everyday: /home, /briefing cached, /news cached, /portfolio, /status.\nAll advanced commands: /help advanced"
+                else "Everyday: /home, /briefing cached, /news cached, /weather, /portfolio, /status.\nAll advanced commands: /help advanced"
             )
         if command == "test":
             return "✅ Telegram delivery works. This response came from trabe."

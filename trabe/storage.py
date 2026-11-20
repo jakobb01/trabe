@@ -148,8 +148,10 @@ class MarketStorage:
                     (str(time.time()),),
                 )
             from trabe.news_event_store import invalidate
+            from trabe.weather import pause_weather
 
             invalidate(db, time.time(), "pause_or_resume")
+            pause_weather(db, time.time())
             db.execute("DELETE FROM outbox WHERE kind!='reply'")
             if until:
                 from trabe.paper_store import PaperStore

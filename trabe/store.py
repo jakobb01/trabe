@@ -36,6 +36,7 @@ class Store(MarketStorage):
         from trabe.price_endpoints import ENDPOINT_SCHEMA
         from trabe.signals import SIGNAL_SCHEMA
         from trabe.snapshots import SNAPSHOT_SCHEMA
+        from trabe.weather import WEATHER_SCHEMA
 
         self.path = path
         with _connection_locks_guard:
@@ -109,6 +110,7 @@ class Store(MarketStorage):
                 *PAPER_SCHEMA,
                 *EVENT_SCHEMA,
                 *UI_SCHEMA,
+                *WEATHER_SCHEMA,
             ):
                 db.execute(statement)
             trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
@@ -131,6 +133,10 @@ class Store(MarketStorage):
                 if name not in outbox_columns:
                     db.execute(f"ALTER TABLE outbox ADD COLUMN {name} {definition}")
             db.executemany("INSERT OR IGNORE INTO settings VALUES (?, ?)", DEFAULTS.items())
+            db.execute(
+                "INSERT OR IGNORE INTO weather_settings(id,timezone) "
+                "SELECT 1,value FROM settings WHERE key='timezone'"
+            )
             if version < 11:
                 # Cache retrieval used to record request start, not receipt. Never backdate knowledge.
                 observed_at = time.time()

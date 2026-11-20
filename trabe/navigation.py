@@ -6,6 +6,8 @@ import time
 from trabe.advisor import Advisor
 from trabe.news_digest import NewsDigest, units
 from trabe.presentation import display_text
+from trabe.weather_ui import apply_action as apply_weather_action
+from trabe.weather_ui import render_weather
 
 UI_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS ui_tokens(
@@ -39,6 +41,8 @@ ACTIONS = {
     "trades",
     "reports",
     "market_reports",
+    "weather",
+    "weather_do",
     "cached_prices",
     "alerts",
     "last_scan",
@@ -258,13 +262,17 @@ class Navigation:
                 ]
             ]
         elif action == "reports":
-            text = "Reports • cached market and paper data"
+            text = "Reports"
             rows = [
                 [
                     button("Market & monitoring", "market_reports"),
                     button("Paper experiment", "paper"),
                 ],
+                [button("Weather", "weather")],
             ]
+        elif action == "weather":
+            text, rows = render_weather(self.store, self.bot.config.owner_id, value, now, button)
+            fallback = "/weather"
         elif action == "market_reports":
             text = "Market & monitoring • cached reports"
             rows = [
@@ -327,7 +335,7 @@ class Navigation:
                     ]
                 )
         elif action == "help":
-            text = "Everyday: /home /briefing cached /news cached /portfolio /status\nAdvanced commands: /help advanced"
+            text = "Everyday: /home /briefing cached /news cached /weather /portfolio /status\nAdvanced commands: /help advanced"
         else:
             text = "Open /home again."
         if action != "home":
@@ -502,21 +510,25 @@ class Navigation:
             return
         self.responder.answer_callback(query["id"])
         _, action, ticker, page, value, _, _, _ = row
+        note = ""
         if action == "news" and not value:
             # Older More buttons stored a three-card group index and no scope marker.
             page *= 3
-        if action == "set":
+        if action == "weather_do":
+            with self.store.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if not self.consume(db, data[2:], message_id):
+                    return
+                value, note = apply_weather_action(db, self.bot.config.owner_id, value, time.time())
+            action = "weather"
+        elif action == "set":
             key, _, setting = value.partition(":")
             if key not in SETTINGS or setting not in {"on", "off"}:
                 return
             try:
                 with self.store.connection() as db:
                     db.execute("BEGIN IMMEDIATE")
-                    consumed = db.execute(
-                        "UPDATE ui_tokens SET used=1 WHERE token=? AND used=0 AND expires>? AND owner=? AND message_id=?",
-                        (data[2:], time.time(), self.bot.config.owner_id, message_id),
-                    ).rowcount
-                    if not consumed:
+                    if not self.consume(db, data[2:], message_id):
                         return
                     if key in {"news_enabled", "earnings_enabled", "insiders_enabled"}:
                         self.bot.insights.apply_automation(
@@ -539,4 +551,12 @@ class Navigation:
             self.bot.insights.wake.set()
             action = "settings"
         text, markup = self.render(action, ticker, page, value=value, message_id=message_id)
+        if note:
+            text = note + "\n\n" + text
         self.bot.telegram.edit(self.bot.config.owner_id, message_id, text, reply_markup=markup)
+
+    def consume(self, db, token, message_id):
+        return db.execute(
+            "UPDATE ui_tokens SET used=1 WHERE token=? AND used=0 AND expires>? AND owner=? AND message_id=?",
+            (token, time.time(), self.bot.config.owner_id, message_id),
+        ).rowcount
